@@ -1,5 +1,4 @@
 import NFTVerificationService from './nftVerification.js';
-import { getFirestore } from 'firebase-admin/firestore';
 import admin from 'firebase-admin';
 
 // Helius DAS API for fetching NFT metadata
@@ -120,7 +119,7 @@ class BoosterService {
 
   get db() {
     if (!this._db) {
-      this._db = getFirestore();
+      this._db = admin.firestore();
     }
     return this._db;
   }

@@ -5,7 +5,7 @@
  */
 
 import admin from "firebase-admin";
-import { getFirestore } from "firebase-admin/firestore";
+// Removed getFirestore import - using admin.firestore() instead
 
 class ForceClaimService {
   constructor() {
@@ -14,7 +14,7 @@ class ForceClaimService {
 
   get db() {
     if (!this._db) {
-      this._db = getFirestore();
+      this._db = admin.firestore();
     }
     return this._db;
   }

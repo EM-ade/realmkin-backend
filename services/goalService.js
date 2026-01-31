@@ -1,5 +1,4 @@
 import admin from "firebase-admin";
-import { getFirestore } from "firebase-admin/firestore";
 
 // Configuration Constants
 const GOAL_COLLECTION = "goal";
@@ -20,7 +19,7 @@ class GoalService {
 
   get db() {
     if (!this._db) {
-      this._db = getFirestore();
+      this._db = admin.firestore();
     }
     return this._db;
   }

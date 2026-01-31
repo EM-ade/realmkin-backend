@@ -14,7 +14,7 @@ import {
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
-import { getFirestore } from "firebase-admin/firestore";
+// Removed getFirestore import - using admin.firestore() instead
 import bs58 from "bs58";
 import BoosterService from "./boosterService.js";
 
@@ -69,7 +69,7 @@ class StakingService {
 
   get db() {
     if (!this._db) {
-      this._db = getFirestore();
+      this._db = admin.firestore();
     }
     return this._db;
   }
