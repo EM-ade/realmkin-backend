@@ -22,10 +22,18 @@ RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y build-essential node-gyp pkg-config python-is-python3
 
 # Install node modules
+# If build context is set to backend-api folder, use these:
+# COPY package-lock.json package.json ./
+# If build context is set to root folder, use these:
 COPY backend-api/package-lock.json backend-api/package.json ./
 RUN npm ci
 
 # Copy application code
+# If build context is set to backend-api folder, use these:
+# COPY . ./
+# COPY ../config/ ./config/
+# COPY ../db.js ./
+# If build context is set to root folder, use these:
 COPY backend-api/ ./
 COPY config/ ./config/
 COPY db.js ./
