@@ -1028,6 +1028,9 @@ class StakingService {
    * Requires $2 USD fee (~0.02 SOL, dynamic).
    */
   async unstake(firebaseUid, amount, txSignature) {
+    const operationId = `UNSTAKE-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const logPrefix = `[${operationId}]`;
+    
     // Ensure network is initialized before proceeding
     await this._ensureInitialized();
     
@@ -1035,7 +1038,7 @@ class StakingService {
     if (!txSignature)
       throw new StakingError("Transaction signature required for fee");
 
-    console.log(`🚀 Starting unstake operation for user ${firebaseUid}: ${amount} MKIN`);
+    console.log(`${logPrefix} 🚀 Starting unstake operation for user ${firebaseUid}: ${amount} MKIN`);
 
     // 1. Check for duplicate unstake transaction FIRST (before any processing)
     console.log(`🔍 Step 1: Checking for duplicate unstake transaction...`);
