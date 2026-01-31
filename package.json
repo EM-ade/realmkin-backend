@@ -1,0 +1,34 @@
+{
+  "name": "gatekeeper-backend-api",
+  "description": "Backend API Service for Gatekeeper - Handles staking, boosters, and claims",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "cross-env NODE_ENV=development node server.js",
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Gatekeeper Team",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
+    "@supabase/supabase-js": "^2.55.0",
+    "axios": "^1.11.0",
+    "bs58": "^6.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.1",
+    "express": "^4.22.1",
+    "firebase-admin": "^13.6.0",
+    "node-cron": "^4.2.1",
+    "node-fetch": "^3.3.2",
+    "postgres": "^3.4.7",
+    "tweetnacl": "^1.0.3"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "nodemon": "^3.0.1"
+  }
+}
