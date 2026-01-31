@@ -5,7 +5,7 @@
 import "dotenv/config";
 
 // Import environment configuration
-import environmentConfig from "../config/environment.js";
+import environmentConfig from "./config/environment.js";
 
 // Validate required environment variables
 try {
@@ -23,10 +23,10 @@ console.log("[API] DATABASE_URL:", process.env.DATABASE_URL ? "Set" : "NOT SET")
 
 import express from "express";
 import admin from "firebase-admin";
-import sql from "../db.js";
+import sql from "./db.js";
 import cors from "cors";
 import { PublicKey } from "@solana/web3.js";
-import withdrawalLogger from "../services/withdrawalLogger.js";
+import withdrawalLogger from "./services/withdrawalLogger.js";
 
 // Initialize Firebase Admin
 console.log("[API] Initializing Firebase Admin...");
@@ -109,12 +109,12 @@ app.get("/health", (_req, res) => {
 });
 
 // Import and mount routes
-import stakingRoutes from "../routes/staking.js";
-import goalRoutes from "../routes/goal.js";
-import leaderboardRoutes from "../routes/leaderboard.js";
-import boosterRoutes from "../routes/boosters.js";
-import distributionRoutes from "../routes/one-time-distribution.js";
-import forceClaimRoutes from "../routes/force-claim.js";
+import stakingRoutes from "./routes/staking.js";
+import goalRoutes from "./routes/goal.js";
+import leaderboardRoutes from "./routes/leaderboard.js";
+import boosterRoutes from "./routes/boosters.js";
+import distributionRoutes from "./routes/one-time-distribution.js";
+import forceClaimRoutes from "./routes/force-claim.js";
 
 app.use("/api/staking", stakingRoutes);
 app.use("/api/goal", goalRoutes);

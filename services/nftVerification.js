@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { PublicKey } from '@solana/web3.js';
-import { heliusRateLimiter } from '../utils/rateLimiter.js';
+import { heliusRateLimiter } from '../utils/rateLimiter.js'; // Keep as ../ since this file is in services/ subdirectory
 import nftCache from './nftCache.js';
 
 class NFTVerificationService {

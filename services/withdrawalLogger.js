@@ -3,7 +3,7 @@
  * Logs all withdrawal attempts for auditing and manual intervention
  */
 
-import sql from '../db.js';
+import sql from '../db.js'; // Keep as ../ since this file is in services/ subdirectory
 
 class WithdrawalLogger {
   /**

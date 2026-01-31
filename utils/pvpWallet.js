@@ -1,4 +1,4 @@
-import sql from '../db.js';
+import sql from '../db.js'; // Keep as ../ since this file is in utils/ subdirectory
 
 async function resolveUserUuidByDiscordId(discordId) {
   const rows = await sql`select user_id from user_links where discord_id = ${discordId}`;
