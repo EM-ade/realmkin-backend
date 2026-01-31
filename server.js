@@ -148,7 +148,7 @@ async function setupAutomaticBoosterRefresh() {
   console.log("[API] Setting up automatic booster refresh (every 30 minutes)...");
   
   try {
-    const BoosterServiceClass = (await import("../services/boosterService.js")).default;
+    const BoosterServiceClass = (await import("./services/boosterService.js")).default;
     const boosterService = new BoosterServiceClass();
     
     // Check if refreshAllActiveBoosters method exists

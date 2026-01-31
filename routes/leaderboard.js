@@ -1,5 +1,4 @@
 import express from "express";
-import { getFirestore } from "firebase-admin/firestore";
 import admin from "firebase-admin";
 
 const router = express.Router();
@@ -16,7 +15,7 @@ router.get("/mining", async (req, res) => {
       period = "all" // "all", "weekly", "daily"
     } = req.query;
 
-    const db = getFirestore();
+    const db = admin.firestore();
     let leaderboard = [];
 
     if (type === "rewards") {
@@ -204,7 +203,7 @@ router.get("/mining/top3", async (req, res) => {
 router.get("/mining/top10", async (req, res) => {
   try {
     const type = req.query.type || "rewards"; // "rewards" or "staked"
-    const db = getFirestore();
+    const db = admin.firestore();
     let leaderboard = [];
 
     if (type === "rewards") {
