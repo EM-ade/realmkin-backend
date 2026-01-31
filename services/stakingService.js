@@ -223,6 +223,33 @@ class StakingService {
     // to avoid excessive reads on every overview call.
     // This change reduces Firebase reads by ~100 per overview call.
 
+    // HOWEVER: Auto-detect boosters on first overview call if user has staked but has no boosters
+    // This ensures users see their boosters immediately after page load
+    if (firebaseUid) {
+      const posRef = this.db.collection(POSITIONS_COLLECTION).doc(firebaseUid);
+      const posDoc = await posRef.get();
+      
+      // If user has a staking position but no boosters detected yet, detect them now
+      if (posDoc.exists) {
+        const posData = posDoc.data();
+        const hasStakedTokens = posData.principal_amount > 0;
+        const hasBoosters = posData.active_boosters && posData.active_boosters.length > 0;
+        
+        if (hasStakedTokens && !hasBoosters) {
+          console.log(`🔍 User ${firebaseUid} has staked but no boosters detected. Auto-detecting now...`);
+          try {
+            const detectedBoosters = await this.boosterService.detectAndAssignBoosters(firebaseUid);
+            if (detectedBoosters && detectedBoosters.length > 0) {
+              console.log(`✨ Auto-detected ${detectedBoosters.length} booster(s): ${detectedBoosters.map(b => b.name).join(', ')}`);
+            }
+          } catch (err) {
+            console.error(`⚠️ Auto-detection failed: ${err.message}`);
+            // Don't fail the overview call if booster detection fails
+          }
+        }
+      }
+    }
+
     const pool = await this.getPoolData();
 
     let userPos = null;
