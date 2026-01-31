@@ -1462,8 +1462,10 @@ class StakingService {
           console.log(`      Amount (display): ${actualDisplayAmount} MKIN`);
           console.log(`      Authority: ${info.authority}`);
 
-          // Verify: source = userATA, destination = vaultATA, amount >= expected (with tolerance)
-          const sourceMatches = info.source === userATA.toBase58();
+          // Verify: destination = vaultATA, amount >= expected (with tolerance)
+          // NOTE: We don't verify source ATA because users can have multiple token accounts
+          // Instead, we verify the authority (signer) matches the user's wallet
+          const authorityMatches = info.authority === userWallet.toBase58();
           const destMatches = info.destination === vaultATA.toBase58();
           
           // Use BigInt comparison for precision, but allow for small tolerance
@@ -1475,7 +1477,10 @@ class StakingService {
 
           console.log(`    Verification:`);
           console.log(
-            `      Source matches: ${sourceMatches} (expected: ${userATA.toBase58()})`
+            `      Source ATA: ${info.source} (not validated - users can have multiple token accounts)`
+          );
+          console.log(
+            `      Authority matches: ${authorityMatches} (expected: ${userWallet.toBase58()})`
           );
           console.log(
             `      Dest matches: ${destMatches} (expected: ${vaultATA.toBase58()})`
@@ -1496,15 +1501,15 @@ class StakingService {
             `        Difference: ${amountDifference} raw (${percentDifference.toFixed(6)}%)`
           );
 
-          if (sourceMatches && destMatches && amountMatches) {
+          if (authorityMatches && destMatches && amountMatches) {
             console.log(
               `✅ Valid token transfer verified: ${info.amount} raw tokens (${actualDisplayAmount} MKIN) from ${userWallet}`
             );
             return true;
           } else {
             // Log specific failure reasons
-            if (!sourceMatches) {
-              console.error(`❌ Source ATA mismatch: got ${info.source}, expected ${userATA.toBase58()}`);
+            if (!authorityMatches) {
+              console.error(`❌ Authority mismatch: got ${info.authority}, expected ${userWallet.toBase58()}`);
             }
             if (!destMatches) {
               console.error(`❌ Destination ATA mismatch: got ${info.destination}, expected ${vaultATA.toBase58()}`);
