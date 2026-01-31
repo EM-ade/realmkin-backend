@@ -779,7 +779,7 @@ class StakingService {
       solAmount: feeAmount,
       usdAmount,
       solPrice,
-    } = await getFeeInSol(0.1); // $0.10 USD (TESTING - normally $2.00)
+    } = await getFeeInSol(2.0); // $2 USD
 
     console.log(
       `${logPrefix} 💵 Claim fee: $${usdAmount} = ${feeAmount.toFixed(
@@ -1089,7 +1089,7 @@ class StakingService {
       solAmount: feeAmount,
       usdAmount,
       solPrice,
-    } = await getFeeInSol(0.1); // $0.10 USD (TESTING - normally $2.00)
+    } = await getFeeInSol(2.0); // $2 USD
 
     console.log(
       `💵 Unstake fee: $${usdAmount} = ${feeAmount.toFixed(
