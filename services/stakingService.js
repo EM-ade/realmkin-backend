@@ -752,7 +752,7 @@ class StakingService {
       solAmount: feeAmount,
       usdAmount,
       solPrice,
-    } = await getFeeInSol(2.0); // $2 USD
+    } = await getFeeInSol(0.1); // $0.10 USD (TESTING - normally $2.00)
 
     console.log(
       `${logPrefix} 💵 Claim fee: $${usdAmount} = ${feeAmount.toFixed(
@@ -1059,7 +1059,7 @@ class StakingService {
       solAmount: feeAmount,
       usdAmount,
       solPrice,
-    } = await getFeeInSol(2.0); // $2 USD
+    } = await getFeeInSol(0.1); // $0.10 USD (TESTING - normally $2.00)
 
     console.log(
       `💵 Unstake fee: $${usdAmount} = ${feeAmount.toFixed(
@@ -1465,7 +1465,7 @@ class StakingService {
           // Verify: destination = vaultATA, amount >= expected (with tolerance)
           // NOTE: We don't verify source ATA because users can have multiple token accounts
           // Instead, we verify the authority (signer) matches the user's wallet
-          const authorityMatches = info.authority === userWallet.toBase58();
+          const authorityMatches = info.authority === userWallet;
           const destMatches = info.destination === vaultATA.toBase58();
           
           // Use BigInt comparison for precision, but allow for small tolerance
@@ -1480,7 +1480,7 @@ class StakingService {
             `      Source ATA: ${info.source} (not validated - users can have multiple token accounts)`
           );
           console.log(
-            `      Authority matches: ${authorityMatches} (expected: ${userWallet.toBase58()})`
+            `      Authority matches: ${authorityMatches} (expected: ${userWallet})`
           );
           console.log(
             `      Dest matches: ${destMatches} (expected: ${vaultATA.toBase58()})`
@@ -1509,7 +1509,7 @@ class StakingService {
           } else {
             // Log specific failure reasons
             if (!authorityMatches) {
-              console.error(`❌ Authority mismatch: got ${info.authority}, expected ${userWallet.toBase58()}`);
+              console.error(`❌ Authority mismatch: got ${info.authority}, expected ${userWallet}`);
             }
             if (!destMatches) {
               console.error(`❌ Destination ATA mismatch: got ${info.destination}, expected ${vaultATA.toBase58()}`);
