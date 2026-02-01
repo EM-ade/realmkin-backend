@@ -422,6 +422,9 @@ app.listen(PORT, HOST, () => {
   
   // Initialize automatic secondary market cache refresh
   setupSecondaryMarketRefresh();
+  
+  // Initialize automatic revenue distribution reminder
+  setupAutomaticRevenueDistribution();
 });
 
 // Automatic Booster Refresh
@@ -535,6 +538,81 @@ async function setupSecondaryMarketRefresh() {
     console.log("📅 [API] Next refresh: Tomorrow at 02:00:00 WAT (Nigerian time)");
   } catch (error) {
     console.error("[API] Failed to initialize secondary market refresh:", error.message);
+  }
+}
+
+/**
+ * Setup automatic monthly revenue distribution
+ * Runs on the 27th of every month at 12:00 PM WAT (Nigerian time)
+ */
+async function setupAutomaticRevenueDistribution() {
+  console.log("[API] Setting up automatic revenue distribution (27th of every month at 12:00 PM WAT)...");
+  
+  try {
+    // Schedule cron job: 27th of every month at 12:00 PM WAT
+    // Cron format: minute hour day-of-month month day-of-week
+    // 0 12 27 * * = At 12:00 PM on day 27 of every month
+    cron.schedule('0 12 27 * *', async () => {
+      try {
+        console.log("⏰ [API] Automatic monthly revenue distribution triggered");
+        
+        // Import revenue distribution service
+        const revenueModule = await import("./routes/revenue-distribution.js");
+        
+        // Call the allocation endpoint internally
+        const db = admin.firestore();
+        const date = new Date();
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const distributionId = `revenue_dist_${year}_${month}`;
+        
+        console.log(`💰 [API] Starting revenue distribution: ${distributionId}`);
+        
+        // Note: This would need the actual allocation logic
+        // For now, log that manual trigger is still recommended
+        console.log("⚠️  [API] Automatic revenue distribution scheduled");
+        console.log("💡 [API] For safety, please use the manual script for now:");
+        console.log("    node scripts/run-production-revenue-distribution.js");
+        
+        // Send Discord notification
+        try {
+          const { sendDiscordAlert } = await import("./utils/discordAlerts.js");
+          await sendDiscordAlert(
+            `📅 Monthly Revenue Distribution Reminder\\n` +
+            `• Date: ${distributionId}\\n` +
+            `• Please run manual distribution script\\n` +
+            `• Command: node scripts/run-production-revenue-distribution.js\\n` +
+            `• Time: ${new Date().toISOString()}`,
+            "info"
+          );
+        } catch (alertError) {
+          console.warn("[API] Failed to send Discord alert:", alertError.message);
+        }
+      } catch (error) {
+        console.error("❌ [API] Automatic revenue distribution check failed:", error.message);
+        
+        // Send Discord notification on failure
+        try {
+          const { sendDiscordAlert } = await import("./utils/discordAlerts.js");
+          await sendDiscordAlert(
+            `❌ Revenue Distribution Reminder FAILED\\n` +
+            `• Error: ${error.message}\\n` +
+            `• Time: ${new Date().toISOString()}`,
+            "error"
+          );
+        } catch (alertError) {
+          console.warn("[API] Failed to send Discord alert:", alertError.message);
+        }
+      }
+    }, {
+      scheduled: true,
+      timezone: "Africa/Lagos" // Nigerian time (WAT - UTC+1)
+    });
+    
+    console.log("✅ [API] Automatic revenue distribution reminder initialized");
+    console.log("📅 [API] Next reminder: 27th of next month at 12:00 PM WAT");
+  } catch (error) {
+    console.error("[API] Failed to initialize revenue distribution reminder:", error.message);
   }
 }
 

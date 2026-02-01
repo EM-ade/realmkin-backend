@@ -489,6 +489,73 @@ router.get('/cache-stats', verifySecretToken, async (req, res) => {
 });
 
 /**
+ * DELETE /api/revenue-distribution/clear-allocations
+ * Clear allocation records for a specific distribution to allow re-running
+ */
+router.delete('/clear-allocations', verifySecretToken, async (req, res) => {
+  try {
+    const { distributionId } = req.body;
+    
+    if (!distributionId) {
+      return res.status(400).json({
+        success: false,
+        error: 'distributionId is required'
+      });
+    }
+    
+    console.log(`🗑️  Clearing allocations for ${distributionId}...`);
+    
+    const db = admin.firestore();
+    
+    // Delete from revenueDistributionAllocations
+    const allocationsSnapshot = await db.collection('revenueDistributionAllocations')
+      .where('distributionId', '==', distributionId)
+      .get();
+    
+    if (allocationsSnapshot.empty) {
+      return res.json({
+        success: true,
+        message: 'No allocations found for this distribution',
+        distributionId,
+        deletedCount: 0
+      });
+    }
+    
+    console.log(`   Found ${allocationsSnapshot.size} allocation records to delete`);
+    
+    // Delete in batches
+    const batchSize = 500;
+    let deletedCount = 0;
+    
+    for (let i = 0; i < allocationsSnapshot.docs.length; i += batchSize) {
+      const batch = db.batch();
+      const chunk = allocationsSnapshot.docs.slice(i, i + batchSize);
+      
+      chunk.forEach(doc => batch.delete(doc.ref));
+      await batch.commit();
+      
+      deletedCount += chunk.length;
+      console.log(`   Deleted ${deletedCount} / ${allocationsSnapshot.size}...`);
+    }
+    
+    console.log(`✅ Cleared ${deletedCount} allocation records for ${distributionId}`);
+    
+    res.json({
+      success: true,
+      message: 'Allocations cleared successfully',
+      distributionId,
+      deletedCount
+    });
+  } catch (error) {
+    console.error('Error clearing allocations:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
  * DELETE /api/revenue-distribution/clear-cache
  * Clear secondary sale verification cache
  */
