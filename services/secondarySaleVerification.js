@@ -57,12 +57,12 @@ class SecondarySaleVerificationService {
 
       // Step 2: Cache miss or expired - query Magic Eden API (rate limited)
       console.log(`🔍 Cache miss for ${walletAddress}, querying Magic Eden...`);
-      const hasSecondary = await this.checkMagicEdenHistory(walletAddress);
+      const result = await this.checkMagicEdenHistory(walletAddress);
 
-      // Step 3: Cache the result
-      await this.cacheResult(walletAddress, hasSecondary);
+      // Step 3: Cache the result (with count)
+      await this.cacheResult(walletAddress, result.hasSecondarySale, result.salesCount);
 
-      return hasSecondary;
+      return result.hasSecondarySale;
     } catch (error) {
       console.error(`❌ Error checking secondary sale for ${walletAddress}:`, error.message);
       
@@ -161,12 +161,12 @@ class SecondarySaleVerificationService {
    * This is rate-limited by magicEdenRateLimiter
    * 
    * @param {string} walletAddress - Solana wallet address
-   * @returns {Promise<boolean>} - True if secondary sales detected
+   * @returns {Promise<{hasSecondarySale: boolean, salesCount: number}>} - Secondary sale info
    */
   async checkMagicEdenHistory(walletAddress) {
     try {
       // Use rate limiter to execute API call safely
-      const hasSecondary = await this.rateLimiter.execute(async () => {
+      const result = await this.rateLimiter.execute(async () => {
         // Query Magic Eden API for wallet activities
         // Note: Magic Eden API v2 endpoint for wallet activities
         const url = `https://api-mainnet.magiceden.dev/v2/wallets/${walletAddress}/activities`;
@@ -204,20 +204,22 @@ class SecondarySaleVerificationService {
           return isSecondaryType && isFromMarketplace && isRealmkinCollection;
         });
 
-        if (secondaryTransactions.length > 0) {
-          console.log(`✨ Found ${secondaryTransactions.length} secondary sale(s) for ${walletAddress}`);
-          return true;
+        const salesCount = secondaryTransactions.length;
+        
+        if (salesCount > 0) {
+          console.log(`✨ Found ${salesCount} secondary sale(s) for ${walletAddress}`);
+          return { hasSecondarySale: true, salesCount };
         }
 
-        return false;
+        return { hasSecondarySale: false, salesCount: 0 };
       });
 
-      return hasSecondary;
+      return result;
     } catch (error) {
       // Check if it's a 404 (wallet not found) - this is normal, not an error
       if (error.response?.status === 404) {
         console.log(`📭 No Magic Eden activity found for ${walletAddress} (404)`);
-        return false;
+        return { hasSecondarySale: false, salesCount: 0 };
       }
 
       // Check if rate limited
@@ -259,12 +261,13 @@ class SecondarySaleVerificationService {
    * @param {string} walletAddress - Wallet address
    * @param {boolean} hasSecondarySale - Result to cache
    */
-  async cacheResult(walletAddress, hasSecondarySale) {
+  async cacheResult(walletAddress, hasSecondarySale, salesCount = 0) {
     try {
       const now = admin.firestore.Timestamp.now();
       const cacheData = {
         walletAddress,
         hasSecondarySale,
+        salesCount, // Store the count of secondary market purchases
         lastCheckedAt: now,
         firstCheckedAt: now, // Will be preserved on updates
       };

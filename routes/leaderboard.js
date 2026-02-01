@@ -330,25 +330,32 @@ router.get('/secondary-market', async (req, res) => {
     
     console.log(`[Leaderboard] Fetching top ${limit} secondary market buyers from cache`);
     
-    // Query secondarySaleCache for users with actual secondary market purchases
+    // Query all cached entries (can't filter by salesCount in query without index)
     const cacheRef = db.collection('secondarySaleCache');
-    const cacheSnapshot = await cacheRef
-      .where('hasSales', '==', true)
-      .get();
+    const cacheSnapshot = await cacheRef.get();
     
     if (cacheSnapshot.empty) {
-      console.log('[Leaderboard] No secondary market buyers found in cache');
+      console.log('[Leaderboard] No secondary market data in cache');
       return res.json({ 
         leaderboard: [],
         message: 'No secondary market data available yet. Please run the cache refresh first.'
       });
     }
     
-    // Sort by salesCount in memory and limit
+    // Filter for users with sales and sort by salesCount in memory
     const sortedDocs = cacheSnapshot.docs
       .map(doc => ({ id: doc.id, ...doc.data() }))
+      .filter(doc => (doc.salesCount || 0) > 0) // Only users with actual sales
       .sort((a, b) => (b.salesCount || 0) - (a.salesCount || 0))
       .slice(0, limit);
+    
+    if (sortedDocs.length === 0) {
+      console.log('[Leaderboard] No users with secondary market sales found');
+      return res.json({ 
+        leaderboard: [],
+        message: 'No users have purchased from secondary market yet.'
+      });
+    }
     
     // Build leaderboard with user details
     const leaderboard = await Promise.all(
