@@ -7,6 +7,9 @@
 import admin from "firebase-admin";
 // Removed getFirestore import - using admin.firestore() instead
 
+// Constants for reward calculation
+const MILLISECONDS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
+
 class ForceClaimService {
   constructor() {
     this._db = null;
@@ -20,6 +23,57 @@ class ForceClaimService {
   }
 
   /**
+   * Convert any timestamp to a valid Date object
+   */
+  convertToValidDate(timestamp, fallbackDate) {
+    try {
+      if (timestamp instanceof Date) {
+        return isNaN(timestamp.getTime()) ? fallbackDate : timestamp;
+      }
+      
+      if (timestamp && typeof timestamp === 'object' && 'toDate' in timestamp && typeof timestamp.toDate === 'function') {
+        const date = timestamp.toDate();
+        return isNaN(date.getTime()) ? fallbackDate : date;
+      }
+      
+      if (timestamp && (typeof timestamp === 'string' || typeof timestamp === 'number')) {
+        const date = new Date(timestamp);
+        return isNaN(date.getTime()) ? fallbackDate : date;
+      }
+      
+      return fallbackDate;
+    } catch (error) {
+      console.warn("Error converting timestamp to Date:", error, "Using fallback date:", fallbackDate.toISOString());
+      return fallbackDate;
+    }
+  }
+
+  /**
+   * Calculate accumulated rewards for a user based on weeklyRate
+   */
+  calculateAccumulatedRewards(userData) {
+    const now = new Date();
+    const weeklyRate = userData.weeklyRate || 0;
+    
+    // If no weeklyRate, no rewards to accumulate
+    if (weeklyRate === 0) {
+      return 0;
+    }
+    
+    const lastCalculated = this.convertToValidDate(
+      userData.lastCalculated || userData.lastClaimed || userData.createdAt,
+      now
+    );
+    
+    const timeSinceLastCalculation = now.getTime() - lastCalculated.getTime();
+    const weeksElapsed = timeSinceLastCalculation / MILLISECONDS_PER_WEEK;
+    
+    const accumulatedReward = weeklyRate * weeksElapsed;
+    
+    return Math.max(0, accumulatedReward);
+  }
+
+  /**
    * Format MKIN amount for display
    */
   formatMKIN(amount) {
@@ -27,19 +81,39 @@ class ForceClaimService {
   }
 
   /**
-   * Save transaction history record
+   * Update lastCalculated timestamp for skipped users
+   * Prevents retroactive reward accumulation when users acquire NFTs later
+   */
+  async updateSkippedUserTimestamp(userId) {
+    try {
+      const userRef = this.db.collection("userRewards").doc(userId);
+      await userRef.update({
+        lastCalculated: new Date(),
+        updatedAt: new Date()
+      });
+      console.log(`🕐 Updated lastCalculated for skipped user ${userId}`);
+    } catch (error) {
+      console.error(`Failed to update timestamp for skipped user ${userId}:`, error);
+    }
+  }
+
+  /**
+   * Save transaction history record (Updated for subcollection structure)
    */
   async saveTransactionHistory({ userId, walletAddress, type, amount, description }) {
     try {
-      const txRef = this.db.collection("transactionHistory").doc();
+      const txRef = this.db.collection(`transactionHistory/${userId}/transactions`).doc();
       await txRef.set({
-        userId,
-        walletAddress: walletAddress || "",
-        type,
+        type: 'mining_claim',
+        status: 'success',
         amount,
-        description,
+        token: 'MKIN',
         timestamp: admin.firestore.Timestamp.now(),
-        createdAt: admin.firestore.Timestamp.now(),
+        metadata: {
+          source: 'weekly_claim',
+          description,
+          walletAddress: walletAddress || "",
+        },
       });
     } catch (error) {
       console.error(`Failed to save transaction history for ${userId}:`, error);
@@ -53,14 +127,29 @@ class ForceClaimService {
     const now = new Date();
 
     try {
+      // Calculate accumulated rewards based on weeklyRate
+      const accumulatedRewards = this.calculateAccumulatedRewards(userData);
       const storedPendingRewards = userData.pendingRewards || 0;
+      const totalRewardsToClaimBefore = storedPendingRewards + accumulatedRewards;
+
+      const weeklyRate = userData.weeklyRate || 0;
 
       console.log(
-        `📊 User ${userId}: pendingRewards=${storedPendingRewards.toFixed(2)}, weeklyRate=${userData.weeklyRate || 0}, totalRealmkin=${userData.totalRealmkin || 0}`
+        `📊 User ${userId}: ` +
+        `weeklyRate=${weeklyRate.toFixed(2)}, ` +
+        `storedPending=${storedPendingRewards.toFixed(2)}, ` +
+        `accumulated=${accumulatedRewards.toFixed(2)}, ` +
+        `totalToClaim=${totalRewardsToClaimBefore.toFixed(2)}`
       );
 
-      if (storedPendingRewards <= 0) {
-        return { userId, amount: 0, success: false, reason: "No pending rewards" };
+      // Skip users with weeklyRate=0 AND no stored pending rewards
+      if (weeklyRate === 0 && storedPendingRewards <= 0) {
+        return { userId, amount: 0, success: false, reason: "No weeklyRate and no pending rewards" };
+      }
+
+      // Skip if total rewards to claim is 0 or negative
+      if (totalRewardsToClaimBefore <= 0) {
+        return { userId, amount: 0, success: false, reason: "No rewards to claim" };
       }
 
       let actualClaimAmount = 0;
@@ -75,13 +164,19 @@ class ForceClaimService {
 
         const currentUserRewards = userRewardsDoc.data();
         const currentPendingRewards = currentUserRewards?.pendingRewards || 0;
+        
+        // Re-calculate accumulated rewards within transaction to ensure consistency
+        const freshAccumulatedRewards = this.calculateAccumulatedRewards(currentUserRewards);
+        
+        // Total rewards = stored pending + newly accumulated
+        const totalRewardsToClaim = currentPendingRewards + freshAccumulatedRewards;
 
-        if (currentPendingRewards <= 0) {
-          console.log(`⚠️ User ${userId}: Pending rewards became 0 during transaction`);
-          throw new Error("No pending rewards available");
+        if (totalRewardsToClaim <= 0) {
+          console.log(`⚠️ User ${userId}: No rewards to claim in transaction`);
+          throw new Error("No rewards available");
         }
 
-        actualClaimAmount = Math.floor(currentPendingRewards * 100) / 100;
+        actualClaimAmount = Math.floor(totalRewardsToClaim * 100) / 100;
 
         // Create claim record
         const claimRecordId = `${userId}_${now.getTime()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -90,23 +185,24 @@ class ForceClaimService {
           userId,
           walletAddress: userData.walletAddress || "",
           amount: actualClaimAmount,
-          nftCount: userData.totalNFTs || 0,
+          weeklyRate: userData.weeklyRate || 0,
           claimedAt: now,
-          weeksClaimed: 0, // Force claim doesn't wait for weeks
-          source: "weekly_auto_claim",
+          weeksClaimed: 0,
+          source: "weekly_claim",
         };
 
         const claimRef = this.db.collection("claimRecords").doc(claimRecordId);
         transaction.set(claimRef, claimRecord);
 
         // Update user rewards
+        // Reset pendingRewards to 0 and update lastCalculated so future calculations start fresh
         transaction.update(userRewardsRef, {
           totalClaimed: (currentUserRewards?.totalClaimed || 0) + actualClaimAmount,
           totalEarned: (currentUserRewards?.totalEarned || 0) + actualClaimAmount,
           totalRealmkin: (currentUserRewards?.totalRealmkin || 0) + actualClaimAmount,
-          pendingRewards: 0,
+          pendingRewards: 0, // Reset to 0 since we claimed everything
           lastClaimed: now,
-          lastCalculated: now,
+          lastCalculated: now, // Reset calculation timestamp
           updatedAt: now,
         });
 
@@ -123,7 +219,7 @@ class ForceClaimService {
         walletAddress: userData.walletAddress,
         type: "claim",
         amount: actualClaimAmount,
-        description: `Force-claimed ${this.formatMKIN(actualClaimAmount)} (weekly auto-claim)`,
+        description: `Weekly mining rewards: ${this.formatMKIN(actualClaimAmount)}`,
       });
 
       return {
@@ -183,17 +279,29 @@ class ForceClaimService {
           
           // In dry run mode, just report what would happen
           if (dryRun) {
-            const pendingRewards = userData.pendingRewards || 0;
-            if (pendingRewards > 0) {
-              console.log(`🧪 [DRY RUN] Would claim ${pendingRewards.toFixed(2)} MKIN for user ${userId}`);
+            const storedPendingRewards = userData.pendingRewards || 0;
+            const accumulatedRewards = this.calculateAccumulatedRewards(userData);
+            const totalRewards = storedPendingRewards + accumulatedRewards;
+            const weeklyRate = userData.weeklyRate || 0;
+            
+            // Skip users with no weeklyRate and no pending rewards
+            if (weeklyRate === 0 && storedPendingRewards <= 0) {
+              return { userId, amount: 0, success: false, reason: "No weeklyRate and no pending rewards", dryRun: true };
+            }
+            
+            if (totalRewards > 0) {
+              console.log(
+                `🧪 [DRY RUN] Would claim ${totalRewards.toFixed(2)} MKIN for user ${userId} ` +
+                `(stored: ${storedPendingRewards.toFixed(2)}, accumulated: ${accumulatedRewards.toFixed(2)})`
+              );
               return {
                 userId,
-                amount: pendingRewards,
+                amount: totalRewards,
                 success: true,
                 dryRun: true,
               };
             }
-            return { userId, amount: 0, success: false, reason: "No pending rewards", dryRun: true };
+            return { userId, amount: 0, success: false, reason: "No rewards to claim", dryRun: true };
           }
           
           return this.processUserForceClaim(userId, userData);
@@ -208,6 +316,15 @@ class ForceClaimService {
         skippedCount += skipped.length;
 
         results.push(...batchResults);
+
+        // Update timestamps for skipped users (only in actual run, not dry-run)
+        if (!dryRun && skipped.length > 0) {
+          console.log(`🕐 Updating timestamps for ${skipped.length} skipped users...`);
+          const timestampUpdates = skipped.map(result => 
+            this.updateSkippedUserTimestamp(result.userId)
+          );
+          await Promise.all(timestampUpdates);
+        }
       }
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
@@ -248,32 +365,47 @@ class ForceClaimService {
 
       let usersWithRewards = 0;
       let totalPendingRewards = 0;
+      let totalAccumulatedRewards = 0;
       const topUsers = [];
 
       snapshot.docs.forEach((doc) => {
         const data = doc.data();
-        const pending = data.pendingRewards || 0;
+        const storedPending = data.pendingRewards || 0;
+        const accumulated = this.calculateAccumulatedRewards(data);
+        const totalRewards = storedPending + accumulated;
+        const weeklyRate = data.weeklyRate || 0;
         
-        if (pending > 0) {
-          usersWithRewards++;
-          totalPendingRewards += pending;
-          topUsers.push({
-            userId: doc.id,
-            pendingRewards: pending,
-            walletAddress: data.walletAddress ? `${data.walletAddress.slice(0, 8)}...` : 'N/A',
-          });
+        // Only count users with weeklyRate > 0 OR stored pending > 0
+        if (weeklyRate > 0 || storedPending > 0) {
+          if (totalRewards > 0) {
+            usersWithRewards++;
+            totalPendingRewards += storedPending;
+            totalAccumulatedRewards += accumulated;
+            topUsers.push({
+              userId: doc.id,
+              weeklyRate,
+              storedPendingRewards: storedPending,
+              accumulatedRewards: accumulated,
+              totalRewards: totalRewards,
+              walletAddress: data.walletAddress ? `${data.walletAddress.slice(0, 8)}...` : 'N/A',
+            });
+          }
         }
       });
 
-      // Sort by pending rewards descending and take top 10
-      topUsers.sort((a, b) => b.pendingRewards - a.pendingRewards);
+      // Sort by total rewards descending and take top 10
+      topUsers.sort((a, b) => b.totalRewards - a.totalRewards);
       const top10 = topUsers.slice(0, 10);
 
       return {
         totalUsers: snapshot.docs.length,
-        usersWithPendingRewards: usersWithRewards,
-        totalPendingRewards,
-        formattedTotal: this.formatMKIN(totalPendingRewards),
+        usersWithRewards: usersWithRewards,
+        totalStoredPendingRewards: totalPendingRewards,
+        totalAccumulatedRewards: totalAccumulatedRewards,
+        totalRewardsToClaim: totalPendingRewards + totalAccumulatedRewards,
+        formattedStoredPending: this.formatMKIN(totalPendingRewards),
+        formattedAccumulated: this.formatMKIN(totalAccumulatedRewards),
+        formattedTotal: this.formatMKIN(totalPendingRewards + totalAccumulatedRewards),
         top10Users: top10,
         timestamp: new Date().toISOString(),
       };

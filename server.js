@@ -25,8 +25,11 @@ import express from "express";
 import admin from "firebase-admin";
 import sql from "./db.js";
 import cors from "cors";
-import { PublicKey } from "@solana/web3.js";
+import cron from "node-cron";
+import { PublicKey, Connection, Transaction, SystemProgram } from "@solana/web3.js";
 import withdrawalLogger from "./services/withdrawalLogger.js";
+import { sendMkinTokens } from "../utils/mkinTransfer.js";
+import { getSolPriceUSD } from "../utils/solPrice.js";
 
 // Initialize Firebase Admin
 console.log("[API] Initializing Firebase Admin...");
@@ -121,6 +124,7 @@ import leaderboardRoutes from "./routes/leaderboard.js";
 import boosterRoutes from "./routes/boosters.js";
 import distributionRoutes from "./routes/one-time-distribution.js";
 import forceClaimRoutes from "./routes/force-claim.js";
+import revenueDistributionRoutes from "./routes/revenue-distribution.js";
 
 app.use("/api/staking", stakingRoutes);
 app.use("/api/goal", goalRoutes);
@@ -128,6 +132,271 @@ app.use("/api/leaderboard", leaderboardRoutes);
 app.use("/api/boosters", boosterRoutes);
 app.use("/api/distribution", distributionRoutes);
 app.use("/api/force-claim", forceClaimRoutes);
+app.use("/api/revenue-distribution", revenueDistributionRoutes);
+
+// Middleware to verify Firebase token
+async function verifyFirebase(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "No token provided" });
+    }
+    const token = authHeader.split("Bearer ")[1];
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.firebaseUid = decoded.uid;
+    req.userEmail = decoded.email;
+    next();
+  } catch (err) {
+    console.warn("verifyFirebase error:", err);
+    return res.status(401).json({ error: "Invalid token" });
+  }
+}
+
+// Transfer endpoint
+app.post("/api/transfer", verifyFirebase, async (req, res) => {
+  try {
+    const { recipientWalletAddress, amount, refId } = req.body || {};
+    if (!recipientWalletAddress || typeof recipientWalletAddress !== "string") {
+      return res.status(400).json({ error: "recipientWalletAddress required" });
+    }
+    if (!Number.isInteger(amount) || amount <= 0) {
+      return res.status(400).json({ error: "amount must be a positive integer" });
+    }
+    if (!refId || typeof refId !== "string") {
+      return res.status(400).json({ error: "refId required" });
+    }
+
+    const fs = admin.firestore();
+    const senderUid = req.firebaseUid;
+
+    // Resolve recipient via Firestore wallets mapping
+    const walletDoc = await fs.collection("wallets").doc(String(recipientWalletAddress).toLowerCase()).get();
+    if (!walletDoc.exists) {
+      return res.status(404).json({ error: "Recipient wallet not found" });
+    }
+    const recipientUid = (walletDoc.data() || {}).uid;
+    if (!recipientUid) {
+      return res.status(404).json({ error: "Recipient user not found" });
+    }
+
+    if (recipientUid === senderUid) {
+      return res.status(400).json({ error: "Cannot transfer to yourself" });
+    }
+
+    // Check for duplicate refId
+    const transferHistoryRef = fs.collection("transferHistory").doc(refId);
+    const existingTransfer = await transferHistoryRef.get();
+    if (existingTransfer.exists) {
+      const senderRewards = await fs.collection("userRewards").doc(senderUid).get();
+      const balance = senderRewards.exists ? senderRewards.data().totalRealmkin || 0 : 0;
+      return res.json({ balance });
+    }
+
+    // Perform atomic transfer
+    let newSenderBalance = 0;
+    await fs.runTransaction(async (transaction) => {
+      const senderRef = fs.collection("userRewards").doc(senderUid);
+      const recipientRef = fs.collection("userRewards").doc(recipientUid);
+
+      const senderDoc = await transaction.get(senderRef);
+      const recipientDoc = await transaction.get(recipientRef);
+
+      if (!senderDoc.exists) {
+        throw new Error("Sender rewards not found");
+      }
+
+      const senderBalance = senderDoc.data().totalRealmkin || 0;
+      if (amount > senderBalance) {
+        throw new Error("Insufficient funds");
+      }
+
+      const recipientBalance = recipientDoc.exists ? recipientDoc.data().totalRealmkin || 0 : 0;
+
+      newSenderBalance = senderBalance - amount;
+      const newRecipientBalance = recipientBalance + amount;
+
+      transaction.update(senderRef, { totalRealmkin: newSenderBalance });
+      if (recipientDoc.exists) {
+        transaction.update(recipientRef, { totalRealmkin: newRecipientBalance });
+      } else {
+        transaction.set(recipientRef, { totalRealmkin: newRecipientBalance, userId: recipientUid });
+      }
+
+      transaction.set(transferHistoryRef, {
+        from: senderUid,
+        to: recipientUid,
+        amount,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+
+    console.log(`[Transfer] ${senderUid} -> ${recipientUid}: ${amount} MKIN`);
+    res.json({ balance: newSenderBalance });
+  } catch (err) {
+    console.error("POST /api/transfer error:", err);
+    res.status(500).json({ error: err.message || "Transfer failed" });
+  }
+});
+
+// Withdraw initiate endpoint
+app.post("/api/withdraw/initiate", verifyFirebase, async (req, res) => {
+  try {
+    const { amount, walletAddress } = req.body;
+    const userId = req.firebaseUid;
+
+    if (!amount || !walletAddress) {
+      return res.status(400).json({ error: "Missing amount or walletAddress" });
+    }
+
+    if (!Number.isInteger(amount) || amount <= 0) {
+      return res.status(400).json({ error: "Invalid amount" });
+    }
+
+    const fs = admin.firestore();
+    const rewardsDoc = await fs.collection("userRewards").doc(userId).get();
+
+    if (!rewardsDoc.exists) {
+      return res.status(404).json({ error: "User rewards not found" });
+    }
+
+    const totalRealmkin = rewardsDoc.data()?.totalRealmkin || 0;
+
+    if (amount > totalRealmkin) {
+      return res.status(400).json({
+        error: "Insufficient balance",
+        available: totalRealmkin,
+      });
+    }
+
+    // Get SOL price and calculate fee
+    const solPrice = await getSolPriceUSD();
+    const feeInUsd = 0.15;
+    const feeInSol = feeInUsd / solPrice;
+
+    // Create fee transaction
+    const treasuryPubkey = new PublicKey(process.env.TREASURY_WALLET || "785QofuiXAy29RnDcH13CcnJu7fqLNp4r9SxeA9Yg9Gt");
+    const userPubkey = new PublicKey(walletAddress);
+    const solanaRpcUrl = process.env.HELIUS_MAINNET_RPC_URL || "https://api.mainnet-beta.solana.com";
+    const connection = new Connection(solanaRpcUrl);
+
+    const transaction = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: userPubkey,
+        toPubkey: treasuryPubkey,
+        lamports: Math.floor(feeInSol * 1e9),
+      })
+    );
+
+    const { blockhash } = await connection.getLatestBlockhash();
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = userPubkey;
+
+    const serializedTx = transaction.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
+    }).toString("base64");
+
+    res.json({
+      success: true,
+      feeTransaction: serializedTx,
+      feeAmountSol: feeInSol,
+      feeAmountUsd: feeInUsd,
+      solPrice,
+    });
+  } catch (err) {
+    console.error("[Withdraw Initiate] Error:", err);
+    res.status(500).json({ error: "Failed to initiate withdrawal" });
+  }
+});
+
+// Withdraw complete endpoint  
+app.post("/api/withdraw/complete", verifyFirebase, async (req, res) => {
+  try {
+    const { feeSignature, amount, walletAddress } = req.body;
+    const userId = req.firebaseUid;
+
+    if (!feeSignature || !amount || !walletAddress) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    if (!Number.isInteger(amount) || amount <= 0) {
+      return res.status(400).json({ error: "Invalid amount" });
+    }
+
+    const fs = admin.firestore();
+
+    // Check if fee already used
+    const usedFeesRef = fs.collection("usedWithdrawalFees").doc(feeSignature);
+    const usedFeeDoc = await usedFeesRef.get();
+
+    if (usedFeeDoc.exists) {
+      return res.status(400).json({ error: "Fee signature already used" });
+    }
+
+    // Verify fee transaction on-chain
+    const heliusApiKey = process.env.HELIUS_API_KEY;
+    const solanaRpcUrl = heliusApiKey
+      ? `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`
+      : "https://api.mainnet-beta.solana.com";
+    const connection = new Connection(solanaRpcUrl);
+
+    const txInfo = await connection.getTransaction(feeSignature, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+
+    if (!txInfo || txInfo.meta?.err) {
+      return res.status(400).json({ error: "Fee transaction invalid or failed" });
+    }
+
+    // Mark fee as used
+    await usedFeesRef.set({
+      userId,
+      amount,
+      walletAddress,
+      usedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // Deduct from Firebase
+    const rewardsRef = fs.collection("userRewards").doc(userId);
+    let newBalance;
+
+    await fs.runTransaction(async (transaction) => {
+      const rewardsDoc = await transaction.get(rewardsRef);
+
+      if (!rewardsDoc.exists) {
+        throw new Error("User rewards not found");
+      }
+
+      const currentBalance = rewardsDoc.data()?.totalRealmkin || 0;
+
+      if (amount > currentBalance) {
+        throw new Error("Insufficient balance");
+      }
+
+      newBalance = currentBalance - amount;
+
+      transaction.update(rewardsRef, {
+        totalRealmkin: newBalance,
+        totalClaimed: admin.firestore.FieldValue.increment(amount),
+      });
+    });
+
+    // Send MKIN tokens
+    const mkinTxHash = await sendMkinTokens(walletAddress, amount);
+
+    console.log(`[Withdraw Complete] Success: ${mkinTxHash}`);
+
+    res.json({
+      success: true,
+      txHash: mkinTxHash,
+      newBalance,
+    });
+  } catch (err) {
+    console.error("[Withdraw Complete] Error:", err);
+    res.status(500).json({ error: err.message || "Failed to complete withdrawal" });
+  }
+});
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -147,6 +416,9 @@ app.listen(PORT, HOST, () => {
   
   // Initialize automatic booster refresh
   setupAutomaticBoosterRefresh();
+  
+  // Initialize automatic force-claim scheduler
+  setupAutomaticForceClaim();
 });
 
 // Automatic Booster Refresh
@@ -179,6 +451,87 @@ async function setupAutomaticBoosterRefresh() {
     }, 30 * 60 * 1000); // 30 minutes
   } catch (error) {
     console.error("[API] Failed to initialize booster refresh:", error.message);
+  }
+}
+
+/**
+ * Setup automatic force-claim scheduler
+ * Runs every Sunday at 12:00 UTC
+ */
+async function setupAutomaticForceClaim() {
+  console.log("[API] Setting up automatic force-claim scheduler (every Sunday at 12:00 UTC)...");
+  
+  try {
+    const forceClaimService = (await import("./services/forceClaimService.js")).default;
+    
+    // Check if runForceClaim method exists
+    if (typeof forceClaimService.runForceClaim !== 'function') {
+      console.warn("[API] ⚠️  Force-claim method not found - skipping automatic scheduler");
+      return;
+    }
+    
+    // Calculate next run time for logging
+    const now = new Date();
+    const currentDay = now.getUTCDay();
+    const daysUntilSunday = currentDay === 0 ? 0 : 7 - currentDay;
+    const nextSunday = new Date(now);
+    nextSunday.setUTCDate(nextSunday.getUTCDate() + daysUntilSunday);
+    nextSunday.setUTCHours(12, 0, 0, 0);
+    
+    // If it's Sunday but past noon, next run is next week
+    if (currentDay === 0 && now.getUTCHours() >= 12) {
+      nextSunday.setUTCDate(nextSunday.getUTCDate() + 7);
+    }
+    
+    console.log(`[API] 📅 Next scheduled force-claim: ${nextSunday.toISOString()}`);
+    
+    // Schedule cron job: Every Sunday at 12:00 UTC
+    // Cron format: second minute hour day month weekday
+    // 0 12 * * 0 = At 12:00 on Sunday
+    cron.schedule('0 12 * * 0', async () => {
+      try {
+        console.log("⏰ [API] Automatic force-claim triggered by scheduler");
+        const result = await forceClaimService.runForceClaim();
+        console.log(`✅ [API] Automatic force-claim completed: ${result.claimsProcessed} claims processed`);
+        
+        // Send Discord notification on success
+        try {
+          const { sendDiscordAlert } = await import("./utils/discordAlerts.js");
+          await sendDiscordAlert(
+            `✅ Automatic Force-Claim Completed\\n` +
+            `• Claims: ${result.claimsProcessed}\\n` +
+            `• Distributed: ₥${result.totalAmountDistributed.toLocaleString()}\\n` +
+            `• Duration: ${result.duration}\\n` +
+            `• Triggered: Automatic (Sunday 12:00 UTC)`,
+            "info"
+          );
+        } catch (alertError) {
+          console.warn("[API] Failed to send Discord alert:", alertError.message);
+        }
+      } catch (error) {
+        console.error("❌ [API] Automatic force-claim failed:", error.message);
+        
+        // Send Discord notification on failure
+        try {
+          const { sendDiscordAlert } = await import("./utils/discordAlerts.js");
+          await sendDiscordAlert(
+            `❌ Automatic Force-Claim FAILED\\n` +
+            `• Error: ${error.message}\\n` +
+            `• Time: ${new Date().toISOString()}`,
+            "error"
+          );
+        } catch (alertError) {
+          console.warn("[API] Failed to send Discord alert:", alertError.message);
+        }
+      }
+    }, {
+      scheduled: true,
+      timezone: "UTC"
+    });
+    
+    console.log("✅ [API] Automatic force-claim scheduler initialized successfully");
+  } catch (error) {
+    console.error("[API] Failed to initialize force-claim scheduler:", error.message);
   }
 }
 

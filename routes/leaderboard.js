@@ -319,4 +319,75 @@ function calculateBoosterMultiplier(activeBoosters = []) {
   return maxMultiplier;
 }
 
+/**
+ * GET /api/leaderboard/secondary-market
+ * Get top users by secondary market NFT purchases
+ */
+router.get('/secondary-market', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    
+    // Get current distribution ID
+    const date = new Date();
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const distributionId = `revenue_dist_${year}_${month}`;
+    
+    console.log(`[Leaderboard] Fetching top ${limit} secondary market buyers for ${distributionId}`);
+    
+    // Query revenue distribution allocations ordered by nftCount
+    const allocationsSnapshot = await db
+      .collection('revenueDistributionAllocations')
+      .where('distributionId', '==', distributionId)
+      .orderBy('nftCount', 'desc')
+      .limit(limit)
+      .get();
+    
+    if (allocationsSnapshot.empty) {
+      console.log('[Leaderboard] No allocations found for this month');
+      return res.json({ leaderboard: [] });
+    }
+    
+    // Build leaderboard with user details
+    const leaderboard = await Promise.all(
+      allocationsSnapshot.docs.map(async (doc, index) => {
+        const allocation = doc.data();
+        const userId = allocation.userId;
+        
+        // Get user profile
+        let username = `User ${userId.slice(0, 6)}`;
+        let avatarUrl = undefined;
+        
+        try {
+          const userDoc = await db.collection('users').doc(userId).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            username = userData.username || userData.email?.split('@')[0] || username;
+            avatarUrl = userData.avatarUrl;
+          }
+        } catch (error) {
+          console.error(`Error fetching user ${userId}:`, error);
+        }
+        
+        return {
+          rank: index + 1,
+          userId,
+          username,
+          nftCount: allocation.nftCount || 0,
+          weight: allocation.weight || 0,
+          avatarUrl,
+        };
+      })
+    );
+    
+    res.json({ leaderboard });
+  } catch (error) {
+    console.error('[Leaderboard] Error fetching secondary market leaderboard:', error);
+    res.status(500).json({
+      error: 'Failed to fetch leaderboard',
+      details: error.message,
+    });
+  }
+});
+
 export default router;
