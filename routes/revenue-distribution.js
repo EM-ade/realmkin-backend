@@ -24,7 +24,7 @@ const CONFIG = {
   
   MIN_NFTS: parseInt(process.env.REVENUE_DISTRIBUTION_MIN_NFTS || '1'),
   CLAIM_FEE_USD: parseFloat(process.env.REVENUE_DISTRIBUTION_CLAIM_FEE_USD || '0.10'),
-  TOKEN_ACCOUNT_CREATION_FEE_USD: 0.10, // Reduced to $0.10 for testing (was $1.00)
+  TOKEN_ACCOUNT_CREATION_FEE_USD: 1.00, // $1.00 per token account creation
   EXPIRY_DAYS: parseInt(process.env.REVENUE_DISTRIBUTION_EXPIRY_DAYS || '30'),
   SECRET_TOKEN: process.env.REVENUE_DISTRIBUTION_SECRET_TOKEN || 'your-secret-token',
   USER_REWARDS_COLLECTION: 'userRewards',
