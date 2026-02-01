@@ -411,7 +411,23 @@ router.get('/secondary-market', async (req, res) => {
       })
     );
     
-    res.json({ leaderboard });
+    // Get the latest cache timestamp
+    const cacheSnapshot = await db.collection('secondarySaleCache')
+      .orderBy('lastCheckedAt', 'desc')
+      .limit(1)
+      .get();
+    
+    const lastUpdated = cacheSnapshot.empty 
+      ? new Date().toISOString()
+      : cacheSnapshot.docs[0].data().lastCheckedAt?.toDate?.().toISOString() || new Date().toISOString();
+    
+    res.json({ 
+      leaderboard,
+      lastUpdated,
+      distributionId,
+      cacheStatus: 'active',
+      nextUpdate: 'Daily at 02:00 UTC'
+    });
   } catch (error) {
     console.error('[Leaderboard] Error fetching secondary market leaderboard:', error);
     res.status(500).json({

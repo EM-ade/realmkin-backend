@@ -419,6 +419,9 @@ app.listen(PORT, HOST, () => {
   
   // Initialize automatic force-claim scheduler
   setupAutomaticForceClaim();
+  
+  // Initialize automatic secondary market cache refresh
+  setupSecondaryMarketRefresh();
 });
 
 // Automatic Booster Refresh
@@ -455,11 +458,92 @@ async function setupAutomaticBoosterRefresh() {
 }
 
 /**
+ * Setup automatic secondary market cache refresh
+ * Runs daily at 2:00 AM UTC to keep leaderboard fresh
+ */
+async function setupSecondaryMarketRefresh() {
+  console.log("[API] Setting up automatic secondary market cache refresh (daily at 2:00 AM WAT/Nigerian time)...");
+  
+  try {
+    // Schedule cron job: Daily at 2:00 AM WAT (Nigerian time)
+    // Cron format: minute hour day month weekday
+    // 0 2 * * * = At 02:00 every day
+    cron.schedule('0 2 * * *', async () => {
+      try {
+        console.log("⏰ [API] Automatic secondary market refresh triggered");
+        
+        // Import the verification service
+        const { default: SecondarySaleVerificationService } = await import("./services/secondarySaleVerification.js");
+        const verificationService = new SecondarySaleVerificationService();
+        
+        // Get all users with wallets
+        const db = admin.firestore();
+        const usersSnapshot = await db.collection('userRewards')
+          .where('walletAddress', '!=', null)
+          .get();
+        
+        const wallets = [];
+        usersSnapshot.forEach(doc => {
+          const data = doc.data();
+          if (data.walletAddress?.trim()) {
+            wallets.push(data.walletAddress);
+          }
+        });
+        
+        console.log(`🔄 [API] Refreshing secondary market cache for ${wallets.length} wallets...`);
+        
+        // Batch verify (uses cache, only queries expired entries)
+        await verificationService.batchVerifyUsers(wallets);
+        
+        console.log(`✅ [API] Secondary market cache refresh completed`);
+        
+        // Send Discord notification
+        try {
+          const { sendDiscordAlert } = await import("./utils/discordAlerts.js");
+          await sendDiscordAlert(
+            `✅ Secondary Market Cache Refreshed\\n` +
+            `• Wallets checked: ${wallets.length}\\n` +
+            `• Time: ${new Date().toISOString()}\\n` +
+            `• Next refresh: Tomorrow at 02:00 UTC`,
+            "info"
+          );
+        } catch (alertError) {
+          console.warn("[API] Failed to send Discord alert:", alertError.message);
+        }
+      } catch (error) {
+        console.error("❌ [API] Secondary market cache refresh failed:", error.message);
+        
+        // Send Discord notification on failure
+        try {
+          const { sendDiscordAlert } = await import("./utils/discordAlerts.js");
+          await sendDiscordAlert(
+            `❌ Secondary Market Cache Refresh FAILED\\n` +
+            `• Error: ${error.message}\\n` +
+            `• Time: ${new Date().toISOString()}`,
+            "error"
+          );
+        } catch (alertError) {
+          console.warn("[API] Failed to send Discord alert:", alertError.message);
+        }
+      }
+    }, {
+      scheduled: true,
+      timezone: "Africa/Lagos" // Nigerian time (WAT - UTC+1)
+    });
+    
+    console.log("✅ [API] Automatic secondary market refresh scheduler initialized");
+    console.log("📅 [API] Next refresh: Tomorrow at 02:00:00 WAT (Nigerian time)");
+  } catch (error) {
+    console.error("[API] Failed to initialize secondary market refresh:", error.message);
+  }
+}
+
+/**
  * Setup automatic force-claim scheduler
  * Runs every Sunday at 12:00 UTC
  */
 async function setupAutomaticForceClaim() {
-  console.log("[API] Setting up automatic force-claim scheduler (every Sunday at 12:00 UTC)...");
+  console.log("[API] Setting up automatic force-claim scheduler (every Sunday at 12:00 PM WAT/Nigerian time)...");
   
   try {
     const forceClaimService = (await import("./services/forceClaimService.js")).default;
@@ -470,22 +554,9 @@ async function setupAutomaticForceClaim() {
       return;
     }
     
-    // Calculate next run time for logging
-    const now = new Date();
-    const currentDay = now.getUTCDay();
-    const daysUntilSunday = currentDay === 0 ? 0 : 7 - currentDay;
-    const nextSunday = new Date(now);
-    nextSunday.setUTCDate(nextSunday.getUTCDate() + daysUntilSunday);
-    nextSunday.setUTCHours(12, 0, 0, 0);
+    console.log(`[API] 📅 Force-claim will run every Sunday at 12:00 PM WAT (Nigerian time)`);
     
-    // If it's Sunday but past noon, next run is next week
-    if (currentDay === 0 && now.getUTCHours() >= 12) {
-      nextSunday.setUTCDate(nextSunday.getUTCDate() + 7);
-    }
-    
-    console.log(`[API] 📅 Next scheduled force-claim: ${nextSunday.toISOString()}`);
-    
-    // Schedule cron job: Every Sunday at 12:00 UTC
+    // Schedule cron job: Every Sunday at 12:00 PM WAT (Nigerian time)
     // Cron format: second minute hour day month weekday
     // 0 12 * * 0 = At 12:00 on Sunday
     cron.schedule('0 12 * * 0', async () => {
@@ -502,7 +573,7 @@ async function setupAutomaticForceClaim() {
             `• Claims: ${result.claimsProcessed}\\n` +
             `• Distributed: ₥${result.totalAmountDistributed.toLocaleString()}\\n` +
             `• Duration: ${result.duration}\\n` +
-            `• Triggered: Automatic (Sunday 12:00 UTC)`,
+            `• Triggered: Automatic (Sunday 12:00 PM WAT/Nigerian time)`,
             "info"
           );
         } catch (alertError) {
@@ -526,7 +597,7 @@ async function setupAutomaticForceClaim() {
       }
     }, {
       scheduled: true,
-      timezone: "UTC"
+      timezone: "Africa/Lagos" // Nigerian time (WAT - UTC+1)
     });
     
     console.log("✅ [API] Automatic force-claim scheduler initialized successfully");
