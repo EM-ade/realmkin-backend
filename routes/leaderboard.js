@@ -328,105 +328,81 @@ router.get('/secondary-market', async (req, res) => {
     const db = admin.firestore();
     const limit = parseInt(req.query.limit) || 10;
     
-    // Get current distribution ID
-    const date = new Date();
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const distributionId = `revenue_dist_${year}_${month}`;
+    console.log(`[Leaderboard] Fetching top ${limit} secondary market buyers from cache`);
     
-    console.log(`[Leaderboard] Fetching top ${limit} secondary market buyers for ${distributionId}`);
+    // Query secondarySaleCache for users with actual secondary market purchases
+    const cacheRef = db.collection('secondarySaleCache');
+    const cacheSnapshot = await cacheRef
+      .where('hasSales', '==', true)
+      .get();
     
-    // Check if collection exists first
-    const collectionRef = db.collection('revenueDistributionAllocations');
-    const testSnapshot = await collectionRef.limit(1).get();
-    
-    if (testSnapshot.empty) {
-      console.log('[Leaderboard] No revenue distribution data available yet');
+    if (cacheSnapshot.empty) {
+      console.log('[Leaderboard] No secondary market buyers found in cache');
       return res.json({ 
         leaderboard: [],
-        message: 'No revenue distribution has been run yet. Please run the monthly allocation first.'
+        message: 'No secondary market data available yet. Please run the cache refresh first.'
       });
     }
     
-    // Query revenue distribution allocations ordered by nftCount
-    let allocationsSnapshot;
-    try {
-      allocationsSnapshot = await collectionRef
-        .where('distributionId', '==', distributionId)
-        .orderBy('nftCount', 'desc')
-        .limit(limit)
-        .get();
-    } catch (indexError) {
-      // If index doesn't exist, fallback to fetching all and sorting in memory
-      console.log('[Leaderboard] Firestore index not found, using fallback query');
-      const allAllocations = await collectionRef
-        .where('distributionId', '==', distributionId)
-        .get();
-      
-      // Sort in memory and limit
-      const sortedDocs = allAllocations.docs
-        .sort((a, b) => (b.data().nftCount || 0) - (a.data().nftCount || 0))
-        .slice(0, limit);
-      
-      allocationsSnapshot = { docs: sortedDocs, empty: sortedDocs.length === 0 };
-    }
-    
-    if (allocationsSnapshot.empty) {
-      console.log('[Leaderboard] No allocations found for this month');
-      return res.json({ 
-        leaderboard: [],
-        message: `No revenue distribution allocations found for ${distributionId}`
-      });
-    }
+    // Sort by salesCount in memory and limit
+    const sortedDocs = cacheSnapshot.docs
+      .map(doc => ({ id: doc.id, ...doc.data() }))
+      .sort((a, b) => (b.salesCount || 0) - (a.salesCount || 0))
+      .slice(0, limit);
     
     // Build leaderboard with user details
     const leaderboard = await Promise.all(
-      allocationsSnapshot.docs.map(async (doc, index) => {
-        const allocation = doc.data();
-        const userId = allocation.userId;
+      sortedDocs.map(async (cacheData, index) => {
+        const walletAddress = cacheData.walletAddress || cacheData.id;
         
-        // Get user profile
-        let username = `User ${userId.slice(0, 6)}`;
+        // Find userId by wallet address
+        let userId = null;
+        let username = `User ${walletAddress.slice(0, 6)}`;
         let avatarUrl = undefined;
         
         try {
-          const userDoc = await db.collection('users').doc(userId).get();
-          if (userDoc.exists) {
-            const userData = userDoc.data();
-            username = userData.username || userData.email?.split('@')[0] || username;
-            avatarUrl = userData.avatarUrl;
+          // Find user by wallet address
+          const userRewardsSnapshot = await db.collection('userRewards')
+            .where('walletAddress', '==', walletAddress)
+            .limit(1)
+            .get();
+          
+          if (!userRewardsSnapshot.empty) {
+            userId = userRewardsSnapshot.docs[0].id;
+            
+            // Get user profile
+            const userDoc = await db.collection('users').doc(userId).get();
+            if (userDoc.exists) {
+              const userData = userDoc.data();
+              username = userData.username || userData.email?.split('@')[0] || username;
+              avatarUrl = userData.avatarUrl;
+            }
           }
         } catch (error) {
-          console.error(`Error fetching user ${userId}:`, error);
+          console.error(`Error fetching user for wallet ${walletAddress}:`, error);
         }
         
         return {
           rank: index + 1,
-          userId,
+          userId: userId || walletAddress,
           username,
-          nftCount: allocation.nftCount || 0,
-          weight: allocation.weight || 0,
+          nftCount: cacheData.salesCount || 0, // Actual secondary market NFT count
+          walletAddress,
           avatarUrl,
         };
       })
     );
     
     // Get the latest cache timestamp
-    const cacheSnapshot = await db.collection('secondarySaleCache')
-      .orderBy('lastCheckedAt', 'desc')
-      .limit(1)
-      .get();
-    
-    const lastUpdated = cacheSnapshot.empty 
-      ? new Date().toISOString()
-      : cacheSnapshot.docs[0].data().lastCheckedAt?.toDate?.().toISOString() || new Date().toISOString();
+    const latestCache = sortedDocs[0]; // First doc has most recent data
+    const lastUpdated = latestCache?.lastCheckedAt?.toDate?.().toISOString() || new Date().toISOString();
     
     res.json({ 
       leaderboard,
       lastUpdated,
-      distributionId,
       cacheStatus: 'active',
-      nextUpdate: 'Daily at 02:00 UTC'
+      nextUpdate: 'Daily at 02:00 AM WAT (Nigerian time)',
+      source: 'secondarySaleCache'
     });
   } catch (error) {
     console.error('[Leaderboard] Error fetching secondary market leaderboard:', error);
