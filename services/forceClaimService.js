@@ -245,17 +245,48 @@ class ForceClaimService {
    * @returns {Promise<Object>} Result summary
    */
   async runForceClaim(options = {}) {
-    const { dryRun = false } = options;
+    const { dryRun = false, pageSize = 100 } = options;
     
     console.log('='.repeat(80));
-    console.log(`⚡ Starting ${dryRun ? 'DRY RUN ' : ''}FORCE claim for all users...`);
+    console.log(`⚡ Starting ${dryRun ? 'DRY RUN ' : ''}FORCE claim for all users (paginated)...`);
     console.log('='.repeat(80));
     
     const startTime = Date.now();
 
     try {
+      // Use pagination to avoid fetching all users at once
       const userRewardsRef = this.db.collection("userRewards");
-      const snapshot = await userRewardsRef.get();
+      
+      let allDocs = [];
+      let lastDoc = null;
+      let pageNum = 1;
+      
+      // Fetch users in pages
+      while (true) {
+        console.log(`📄 Fetching page ${pageNum} (${pageSize} users per page)...`);
+        
+        let query = userRewardsRef.orderBy("createdAt").limit(pageSize);
+        if (lastDoc) {
+          query = query.startAfter(lastDoc);
+        }
+        
+        const snapshot = await query.get();
+        
+        if (snapshot.empty) {
+          break;
+        }
+        
+        allDocs.push(...snapshot.docs);
+        lastDoc = snapshot.docs[snapshot.docs.length - 1];
+        pageNum++;
+        
+        console.log(`   Fetched ${snapshot.docs.length} users (total so far: ${allDocs.length})`);
+        
+        // If we got fewer than pageSize, we're done
+        if (snapshot.docs.length < pageSize) {
+          break;
+        }
+      }
 
       let totalClaims = 0;
       let totalAmount = 0;
@@ -263,9 +294,9 @@ class ForceClaimService {
       const results = [];
 
       const batchSize = 20;
-      const docs = snapshot.docs;
+      const docs = allDocs; // Use paginated docs instead of snapshot.docs
 
-      console.log(`📋 Found ${docs.length} users to process`);
+      console.log(`📋 Found ${docs.length} users to process (fetched via pagination)`);
 
       for (let i = 0; i < docs.length; i += batchSize) {
         const batch = docs.slice(i, i + batchSize);

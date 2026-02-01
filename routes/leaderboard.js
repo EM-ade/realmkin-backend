@@ -3,6 +3,32 @@ import admin from "firebase-admin";
 
 const router = express.Router();
 
+// In-memory cache for leaderboard data
+const leaderboardCache = {
+  mining: { data: null, timestamp: 0 },
+  secondaryMarket: { data: null, timestamp: 0 },
+};
+
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+function getCachedData(cacheKey) {
+  const cached = leaderboardCache[cacheKey];
+  if (cached.data && Date.now() - cached.timestamp < CACHE_DURATION) {
+    console.log(`[Leaderboard] Cache HIT for ${cacheKey} (age: ${Math.floor((Date.now() - cached.timestamp) / 1000)}s)`);
+    return cached.data;
+  }
+  console.log(`[Leaderboard] Cache MISS for ${cacheKey}`);
+  return null;
+}
+
+function setCachedData(cacheKey, data) {
+  leaderboardCache[cacheKey] = {
+    data,
+    timestamp: Date.now(),
+  };
+  console.log(`[Leaderboard] Cached ${cacheKey} for ${CACHE_DURATION / 1000}s`);
+}
+
 /**
  * GET /leaderboard/mining
  * Returns top miners based on total claimed rewards or current staked amount
@@ -203,6 +229,14 @@ router.get("/mining/top3", async (req, res) => {
 router.get("/mining/top10", async (req, res) => {
   try {
     const type = req.query.type || "rewards"; // "rewards" or "staked"
+    const cacheKey = `mining_${type}_top10`;
+    
+    // Check cache first
+    const cached = getCachedData(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+    
     const db = admin.firestore();
     let leaderboard = [];
 
@@ -215,13 +249,20 @@ router.get("/mining/top10", async (req, res) => {
         .limit(10)
         .get();
 
+      // Batch get all usernames (fix N+1 query)
+      const userIds = snapshot.docs.map(doc => doc.id);
+      const userDocs = await db.getAll(...userIds.map(id => db.collection("users").doc(id)));
+      const userMap = new Map();
+      userDocs.forEach(doc => {
+        if (doc.exists) {
+          userMap.set(doc.id, doc.data());
+        }
+      });
+
       for (const doc of snapshot.docs) {
         const data = doc.data();
         const userId = doc.id;
-
-        // Get username from users collection
-        const userDoc = await db.collection("users").doc(userId).get();
-        const userData = userDoc.exists ? userDoc.data() : {};
+        const userData = userMap.get(userId) || {};
         let displayName = userData.username || `User${userId.slice(-4)}`;
 
         leaderboard.push({
@@ -247,13 +288,20 @@ router.get("/mining/top10", async (req, res) => {
         .limit(10)
         .get();
 
+      // Batch get all usernames (fix N+1 query)
+      const userIds = snapshot.docs.map(doc => doc.id);
+      const userDocs = await db.getAll(...userIds.map(id => db.collection("users").doc(id)));
+      const userMap = new Map();
+      userDocs.forEach(doc => {
+        if (doc.exists) {
+          userMap.set(doc.id, doc.data());
+        }
+      });
+
       for (const doc of snapshot.docs) {
         const data = doc.data();
         const userId = doc.id;
-
-        // Get username from users collection
-        const userDoc = await db.collection("users").doc(userId).get();
-        const userData = userDoc.exists ? userDoc.data() : {};
+        const userData = userMap.get(userId) || {};
         let displayName = userData.username || `User${userId.slice(-4)}`;
 
         leaderboard.push({
@@ -271,7 +319,7 @@ router.get("/mining/top10", async (req, res) => {
       }
     }
 
-    res.json({
+    const response = {
       success: true,
       top10: leaderboard,
       metadata: {
@@ -279,9 +327,15 @@ router.get("/mining/top10", async (req, res) => {
         totalEntries: leaderboard.length,
         lastUpdated: new Date().toISOString(),
         criteria: type === "rewards" ? "Total SOL Claimed" : "Current MKIN Staked",
-        displayType: "top10"
+        displayType: "top10",
+        cached: false
       }
-    });
+    };
+    
+    // Cache the response
+    setCachedData(cacheKey, response);
+    
+    res.json(response);
 
   } catch (error) {
     console.error("Error fetching top 10 miners:", error);
@@ -325,9 +379,16 @@ function calculateBoosterMultiplier(activeBoosters = []) {
  */
 router.get('/secondary-market', async (req, res) => {
   try {
-    const db = admin.firestore();
     const limit = parseInt(req.query.limit) || 10;
+    const cacheKey = `secondaryMarket_top${limit}`;
     
+    // Check cache first
+    const cached = getCachedData(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+    
+    const db = admin.firestore();
     console.log(`[Leaderboard] Fetching top ${limit} secondary market buyers from cache`);
     
     // Query all cached entries (can't filter by salesCount in query without index)
@@ -404,13 +465,19 @@ router.get('/secondary-market', async (req, res) => {
     const latestCache = sortedDocs[0]; // First doc has most recent data
     const lastUpdated = latestCache?.lastCheckedAt?.toDate?.().toISOString() || new Date().toISOString();
     
-    res.json({ 
+    const response = { 
       leaderboard,
       lastUpdated,
       cacheStatus: 'active',
       nextUpdate: 'Daily at 02:00 AM WAT (Nigerian time)',
-      source: 'secondarySaleCache'
-    });
+      source: 'secondarySaleCache',
+      cached: false
+    };
+    
+    // Cache the response
+    setCachedData(cacheKey, response);
+    
+    res.json(response);
   } catch (error) {
     console.error('[Leaderboard] Error fetching secondary market leaderboard:', error);
     res.status(500).json({

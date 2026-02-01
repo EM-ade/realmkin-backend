@@ -244,25 +244,50 @@ router.post('/allocate', verifySecretToken, async (req, res) => {
       }
     }
     
-    // Step 2: Load all users with wallets
-    console.log(`\n📖 Step 1: Loading users with wallets...`);
-    const usersSnapshot = await db.collection(CONFIG.USER_REWARDS_COLLECTION)
-      .where('walletAddress', '!=', null)
-      .get();
-    
+    // Step 2: Load all users with wallets (using pagination)
+    console.log(`\n📖 Step 1: Loading users with wallets (paginated)...`);
     const allUsers = [];
-    usersSnapshot.forEach(doc => {
-      const data = doc.data();
-      if (data.walletAddress?.trim()) {
-        allUsers.push({
-          userId: doc.id,
-          walletAddress: data.walletAddress,
-          totalRealmkin: data.totalRealmkin || 0,
-        });
-      }
-    });
+    let lastDoc = null;
+    let pageNum = 1;
+    const pageSize = 100;
     
-    console.log(`✅ Loaded ${allUsers.length} users with wallets`);
+    while (true) {
+      let query = db.collection(CONFIG.USER_REWARDS_COLLECTION)
+        .where('walletAddress', '!=', null)
+        .orderBy('walletAddress')
+        .limit(pageSize);
+      
+      if (lastDoc) {
+        query = query.startAfter(lastDoc);
+      }
+      
+      const snapshot = await query.get();
+      
+      if (snapshot.empty) {
+        break;
+      }
+      
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        if (data.walletAddress?.trim()) {
+          allUsers.push({
+            userId: doc.id,
+            walletAddress: data.walletAddress,
+            totalRealmkin: data.totalRealmkin || 0,
+          });
+        }
+      });
+      
+      lastDoc = snapshot.docs[snapshot.docs.length - 1];
+      console.log(`   📄 Page ${pageNum}: Fetched ${snapshot.docs.length} users (total: ${allUsers.length})`);
+      pageNum++;
+      
+      if (snapshot.docs.length < pageSize) {
+        break;
+      }
+    }
+    
+    console.log(`✅ Loaded ${allUsers.length} users with wallets (fetched via pagination)`);
     
     // Step 3: Filter by NFT count (fast, no API calls)
     console.log(`\n🔍 Step 2: Filtering by NFT count (>= ${CONFIG.MIN_NFTS})...`);

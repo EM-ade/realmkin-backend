@@ -30,6 +30,7 @@ import { PublicKey, Connection, Transaction, SystemProgram } from "@solana/web3.
 import withdrawalLogger from "./services/withdrawalLogger.js";
 import { sendMkinTokens } from "./utils/mkinTransfer.js";
 import { getSolPriceUSD } from "./utils/solPrice.js";
+import queryMonitor from "./utils/queryMonitor.js";
 
 // Initialize Firebase Admin
 console.log("[API] Initializing Firebase Admin...");
@@ -413,6 +414,7 @@ app.listen(PORT, HOST, () => {
   console.log(`🚀 [API] HTTP Server listening on ${HOST}:${PORT}`);
   console.log(`📊 [API] Environment: ${envInfo.nodeEnv}`);
   console.log(`🔧 [API] Feature flags:`, environmentConfig.featureFlags);
+  console.log(`📊 [API] Firebase Query Monitor initialized (logs every 5 minutes)`);
   
   // Initialize automatic booster refresh
   setupAutomaticBoosterRefresh();
@@ -479,19 +481,46 @@ async function setupSecondaryMarketRefresh() {
         const { default: SecondarySaleVerificationService } = await import("./services/secondarySaleVerification.js");
         const verificationService = new SecondarySaleVerificationService();
         
-        // Get all users with wallets
+        // Get all users with wallets (using pagination)
         const db = admin.firestore();
-        const usersSnapshot = await db.collection('userRewards')
-          .where('walletAddress', '!=', null)
-          .get();
-        
         const wallets = [];
-        usersSnapshot.forEach(doc => {
-          const data = doc.data();
-          if (data.walletAddress?.trim()) {
-            wallets.push(data.walletAddress);
+        let lastDoc = null;
+        let pageNum = 1;
+        const pageSize = 100;
+        
+        console.log(`🔄 [API] Fetching users with wallets (paginated)...`);
+        
+        while (true) {
+          let query = db.collection('userRewards')
+            .where('walletAddress', '!=', null)
+            .orderBy('walletAddress')
+            .limit(pageSize);
+          
+          if (lastDoc) {
+            query = query.startAfter(lastDoc);
           }
-        });
+          
+          const snapshot = await query.get();
+          
+          if (snapshot.empty) {
+            break;
+          }
+          
+          snapshot.forEach(doc => {
+            const data = doc.data();
+            if (data.walletAddress?.trim()) {
+              wallets.push(data.walletAddress);
+            }
+          });
+          
+          lastDoc = snapshot.docs[snapshot.docs.length - 1];
+          console.log(`   📄 Page ${pageNum}: Fetched ${snapshot.docs.length} users (total: ${wallets.length})`);
+          pageNum++;
+          
+          if (snapshot.docs.length < pageSize) {
+            break;
+          }
+        }
         
         console.log(`🔄 [API] Refreshing secondary market cache for ${wallets.length} wallets...`);
         
