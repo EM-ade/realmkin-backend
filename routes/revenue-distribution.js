@@ -1,6 +1,6 @@
 import express from 'express';
 import admin from 'firebase-admin';
-import { Keypair, PublicKey, Transaction, SystemProgram } from '@solana/web3.js';
+import { Keypair, PublicKey, Transaction, SystemProgram, Connection } from '@solana/web3.js';
 import { getAssociatedTokenAddress, createTransferInstruction } from '@solana/spl-token';
 import bs58 from 'bs58';
 import secondarySaleVerificationService from '../services/secondarySaleVerification.js';
@@ -20,12 +20,12 @@ const CONFIG = {
   
   // Token mint addresses
   EMPIRE_MINT: 'EmpirdtfUMfBQXEjnNmTngeimjfizfuSBD3TN9zqzydj',
-  MKIN_MINT: 'MKiNfTBT83DH1GK4azYyypSvQVPhN3E3tGYiHcR2BPR',
+  MKIN_MINT: process.env.MKIN_TOKEN_MINT || 'BKDGf6DnDHK87GsZpdWXyBqiNdcNb6KnoFcYbWPUhJLA',
   
   MIN_NFTS: parseInt(process.env.REVENUE_DISTRIBUTION_MIN_NFTS || '1'),
   CLAIM_FEE_USD: parseFloat(process.env.REVENUE_DISTRIBUTION_CLAIM_FEE_USD || '0.10'),
+  TOKEN_ACCOUNT_CREATION_FEE_USD: 0.10, // Reduced to $0.10 for testing (was $1.00)
   EXPIRY_DAYS: parseInt(process.env.REVENUE_DISTRIBUTION_EXPIRY_DAYS || '30'),
-  TOKEN_ACCOUNT_RENT: 0.00203928, // Rent-exempt minimum for token accounts
   SECRET_TOKEN: process.env.REVENUE_DISTRIBUTION_SECRET_TOKEN || 'your-secret-token',
   USER_REWARDS_COLLECTION: 'userRewards',
   ALLOCATIONS_COLLECTION: 'revenueDistributionAllocations',
@@ -43,7 +43,6 @@ const ACTIVE_CONTRACTS = [
  * Helper: Get Solana connection
  */
 function getConnection() {
-  const { Connection } = require('@solana/web3.js');
   return new Connection(
     process.env.HELIUS_MAINNET_RPC_URL || process.env.SOLANA_RPC_URL,
     'confirmed'
@@ -121,7 +120,12 @@ async function getUsdInSol(usdAmount) {
 async function verifySolTransfer(signature, minAmountSol, maxAmountSol) {
   try {
     const connection = getConnection();
-    const stakingAddr = process.env.STAKING_WALLET_ADDRESS;
+    
+    // Get gatekeeper address from keypair
+    const gatekeeperKeypair = Keypair.fromSecretKey(
+      new Uint8Array(JSON.parse(process.env.GATEKEEPER_KEYPAIR))
+    );
+    const gatekeeperAddr = gatekeeperKeypair.publicKey.toBase58();
     
     const tx = await connection.getParsedTransaction(signature, {
       commitment: 'confirmed',
@@ -139,7 +143,7 @@ async function verifySolTransfer(signature, minAmountSol, maxAmountSol) {
         const info = ix.parsed.info;
         const solAmount = info.lamports / 1e9;
         
-        if (info.destination === stakingAddr && 
+        if (info.destination === gatekeeperAddr && 
             solAmount >= minAmountSol && 
             solAmount <= maxAmountSol) {
           return true;
@@ -266,6 +270,8 @@ router.post('/allocate', verifySecretToken, async (req, res) => {
     console.log(`✅ ${nftEligible.length} users have ${CONFIG.MIN_NFTS}+ NFTs`);
     
     // Step 4: Verify secondary sales (RATE LIMITED - this is slow)
+    // TEMPORARILY DISABLED FOR TESTING - Remove comments to re-enable
+    /*
     console.log(`\n⏳ Step 3: Verifying secondary market purchases (RATE LIMITED)...`);
     console.log(`This may take 10-15 minutes for ${nftEligible.length} users...`);
     
@@ -287,6 +293,12 @@ router.post('/allocate', verifySecretToken, async (req, res) => {
     const eligible = nftEligible.filter(u => secondarySaleMap.get(u.walletAddress) === true);
     
     console.log(`\n✅ ${eligible.length} users have secondary market purchases`);
+    */
+    
+    // TEMPORARY: Skip secondary market check for testing
+    console.log(`\n⚠️ Step 3: Secondary market verification DISABLED (testing mode)`);
+    const eligible = nftEligible;
+    console.log(`✅ ${eligible.length} users eligible (secondary market check bypassed)`);
     
     // Step 4: Calculate weight-based shares
     console.log(`\n📊 Step 4: Calculating weight-based distribution...`);
@@ -345,7 +357,7 @@ router.post('/allocate', verifySecretToken, async (req, res) => {
             amountSol: user.amountSol,
             amountEmpire: user.amountEmpire,
             amountMkin: user.amountMkin,
-            hasSecondarySale: true,
+            hasSecondarySale: false, // TEMPORARY: Set to false during testing (was true)
             // Legacy field for backward compatibility
             allocatedAmountUsd: CONFIG.ALLOCATION_AMOUNT_USD,
             eligibleAt: now,
@@ -669,6 +681,10 @@ router.get('/check-eligibility', verifyFirebaseAuth, async (req, res) => {
       success: true,
       eligible: true,
       distributionId,
+      amountSol: allocation.amountSol || 0,
+      amountEmpire: allocation.amountEmpire || 0,
+      amountMkin: allocation.amountMkin || 0,
+      weight: allocation.weight || 0,
       amountUsd: allocation.allocatedAmountUsd,
       claimFeeUsd: CONFIG.CLAIM_FEE_USD,
       expiresAt: new Date(expiresAt).toISOString(),
@@ -789,26 +805,43 @@ router.post('/claim', verifyFirebaseAuth, async (req, res) => {
     
     // Step 4: Calculate total expected fee (base + account creation)
     const { solAmount: baseFeeAmount, usdAmount: baseFeeUsd, solPrice } = await getUsdInSol(CONFIG.CLAIM_FEE_USD);
-    const accountCreationFeeUsd = accountsToCreate * CONFIG.TOKEN_ACCOUNT_RENT * solPrice;
+    const accountCreationFeeUsd = accountsToCreate * CONFIG.TOKEN_ACCOUNT_CREATION_FEE_USD;
     const totalExpectedFeeUsd = CONFIG.CLAIM_FEE_USD + accountCreationFeeUsd;
     const { solAmount: totalExpectedFeeSol } = await getUsdInSol(totalExpectedFeeUsd);
     
     console.log(`${logPrefix} 💵 Fee breakdown:`);
-    console.log(`   Base fee: ${baseFeeAmount.toFixed(6)} SOL ($${CONFIG.CLAIM_FEE_USD})`);
-    console.log(`   Account creation: ${(accountsToCreate * CONFIG.TOKEN_ACCOUNT_RENT).toFixed(6)} SOL ($${accountCreationFeeUsd.toFixed(4)}) for ${accountsToCreate} accounts`);
-    console.log(`   Total expected: ${totalExpectedFeeSol.toFixed(6)} SOL ($${totalExpectedFeeUsd.toFixed(4)})`);
+    console.log(`   Base claim fee: ${baseFeeAmount.toFixed(6)} SOL ($${CONFIG.CLAIM_FEE_USD})`);
+    console.log(`   Token account creation: $${accountCreationFeeUsd.toFixed(2)} ($${CONFIG.TOKEN_ACCOUNT_CREATION_FEE_USD} × ${accountsToCreate} accounts)`);
+    console.log(`   Total expected: ${totalExpectedFeeSol.toFixed(6)} SOL ($${totalExpectedFeeUsd.toFixed(2)})`);
     
-    // Step 5: Verify fee payment (with tolerance for price fluctuation)
+    // Step 5: Verify fee payment (with tolerance for price fluctuation and overpayment)
     console.log(`${logPrefix} 🔍 Verifying fee payment...`);
     const tolerance = 0.20; // 20% tolerance for price fluctuation
+    const overpaymentTolerance = 0.50; // Allow up to 50% overpayment (in case accounts already exist)
     const minFee = totalExpectedFeeSol * (1 - tolerance);
-    const maxFee = totalExpectedFeeSol * (1 + tolerance);
+    const maxFee = totalExpectedFeeSol * (1 + tolerance + overpaymentTolerance);
     
     const isValidFee = await verifySolTransfer(feeSignature, minFee, maxFee);
     
     if (!isValidFee) {
       console.error(`${logPrefix} ❌ Fee verification failed`);
       console.error(`${logPrefix}   Expected: ${totalExpectedFeeSol.toFixed(6)} SOL (min: ${minFee.toFixed(6)}, max: ${maxFee.toFixed(6)})`);
+      
+      // Log failed attempt to transaction history
+      await db.collection('transactionHistory').add({
+        userId,
+        walletAddress: allocation.walletAddress,
+        type: 'revenue_claim_failed',
+        status: 'failed',
+        amount: 0,
+        description: `Revenue claim failed: Invalid fee payment (expected ${totalExpectedFeeSol.toFixed(6)} SOL)`,
+        feeSignature,
+        distributionId,
+        errorReason: 'Invalid fee payment',
+        timestamp: admin.firestore.Timestamp.now(),
+        createdAt: admin.firestore.Timestamp.now(),
+      });
+      
       return res.status(400).json({
         success: false,
         error: 'Invalid fee payment',
@@ -891,12 +924,22 @@ router.post('/claim', verifyFirebaseAuth, async (req, res) => {
     if (payoutEmpire > 0) {
       const gatekeeperEmpireAta = await getAssociatedTokenAddress(empireMint, gatekeeperPubkey);
       
+      // Check gatekeeper EMPIRE balance
+      const empireBalance = await connection.getTokenAccountBalance(gatekeeperEmpireAta);
+      const empireAmount = Math.round(payoutEmpire * 1e5); // EMPIRE has 5 decimals!
+      console.log(`${logPrefix}   Gatekeeper EMPIRE balance: ${empireBalance.value.uiAmount} (${empireBalance.value.amount} base units)`);
+      console.log(`${logPrefix}   EMPIRE to transfer: ${payoutEmpire} (${empireAmount} base units)`);
+      
+      if (BigInt(empireBalance.value.amount) < BigInt(empireAmount)) {
+        throw new Error(`Insufficient EMPIRE balance: has ${empireBalance.value.uiAmount}, needs ${payoutEmpire}`);
+      }
+      
       transaction.add(
         createTransferInstruction(
           gatekeeperEmpireAta,
           userEmpireAta,
           gatekeeperPubkey,
-          Math.round(payoutEmpire * 1e9) // EMPIRE has 9 decimals
+          Math.round(payoutEmpire * 1e5) // EMPIRE has 5 decimals
         )
       );
       console.log(`${logPrefix}   ✓ Added EMPIRE transfer: ${payoutEmpire.toFixed(2)}`);
@@ -905,6 +948,16 @@ router.post('/claim', verifyFirebaseAuth, async (req, res) => {
     // Add MKIN token transfer
     if (payoutMkin > 0) {
       const gatekeeperMkinAta = await getAssociatedTokenAddress(mkinMint, gatekeeperPubkey);
+      
+      // Check gatekeeper MKIN balance
+      const mkinBalance = await connection.getTokenAccountBalance(gatekeeperMkinAta);
+      const mkinAmount = Math.round(payoutMkin * 1e9);
+      console.log(`${logPrefix}   Gatekeeper MKIN balance: ${mkinBalance.value.uiAmount} (${mkinBalance.value.amount} base units)`);
+      console.log(`${logPrefix}   MKIN to transfer: ${payoutMkin} (${mkinAmount} base units)`);
+      
+      if (BigInt(mkinBalance.value.amount) < BigInt(mkinAmount)) {
+        throw new Error(`Insufficient MKIN balance: has ${mkinBalance.value.uiAmount}, needs ${payoutMkin}`);
+      }
       
       transaction.add(
         createTransferInstruction(
@@ -955,13 +1008,31 @@ router.post('/claim', verifyFirebaseAuth, async (req, res) => {
         status: 'PENDING_RECOVERY',
       });
       
+      // Log failed attempt to transaction history
+      await db.collection('transactionHistory').add({
+        userId,
+        walletAddress: allocation.walletAddress,
+        type: 'revenue_claim_failed',
+        status: 'failed',
+        amount: 0,
+        description: `Revenue claim payout failed: ${payoutError.message}`,
+        feeSignature,
+        distributionId,
+        expectedAmountSol: payoutSol,
+        expectedAmountEmpire: payoutEmpire,
+        expectedAmountMkin: payoutMkin,
+        errorReason: payoutError.message,
+        timestamp: admin.firestore.Timestamp.now(),
+        createdAt: admin.firestore.Timestamp.now(),
+      });
+      
       return res.status(500).json({
         success: false,
         error: 'Payout failed. Your claim has been logged for manual processing. Please contact support.',
       });
     }
     
-    // Step 7: Update allocation and create claim record
+    // Step 7: Update allocation, create claim record, and log to transaction history
     const claimTimestamp = admin.firestore.Timestamp.now();
     
     await db.runTransaction(async (transaction) => {
@@ -993,6 +1064,26 @@ router.post('/claim', verifyFirebaseAuth, async (req, res) => {
         payoutTx: payoutSignature,
         claimedAt: claimTimestamp,
         status: 'completed',
+      });
+      
+      // Log successful claim to transaction history
+      const txHistoryRef = db.collection('transactionHistory').doc();
+      transaction.set(txHistoryRef, {
+        userId,
+        walletAddress: allocation.walletAddress,
+        type: 'revenue_claim',
+        status: 'completed',
+        amount: payoutMkin, // Show MKIN as primary amount
+        description: `Revenue distribution claimed: ${payoutMkin.toFixed(2)} MKIN, ${payoutEmpire.toFixed(2)} EMPIRE, ${payoutSol.toFixed(6)} SOL`,
+        distributionId,
+        amountSol: payoutSol,
+        amountEmpire: payoutEmpire,
+        amountMkin: payoutMkin,
+        feeSignature,
+        payoutSignature,
+        accountsCreated: accountsCreated.join(', ') || 'none',
+        timestamp: claimTimestamp,
+        createdAt: claimTimestamp,
       });
     });
     
