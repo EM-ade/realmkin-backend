@@ -325,6 +325,7 @@ function calculateBoosterMultiplier(activeBoosters = []) {
  */
 router.get('/secondary-market', async (req, res) => {
   try {
+    const db = admin.firestore();
     const limit = parseInt(req.query.limit) || 10;
     
     // Get current distribution ID
@@ -335,17 +336,47 @@ router.get('/secondary-market', async (req, res) => {
     
     console.log(`[Leaderboard] Fetching top ${limit} secondary market buyers for ${distributionId}`);
     
+    // Check if collection exists first
+    const collectionRef = db.collection('revenueDistributionAllocations');
+    const testSnapshot = await collectionRef.limit(1).get();
+    
+    if (testSnapshot.empty) {
+      console.log('[Leaderboard] No revenue distribution data available yet');
+      return res.json({ 
+        leaderboard: [],
+        message: 'No revenue distribution has been run yet. Please run the monthly allocation first.'
+      });
+    }
+    
     // Query revenue distribution allocations ordered by nftCount
-    const allocationsSnapshot = await db
-      .collection('revenueDistributionAllocations')
-      .where('distributionId', '==', distributionId)
-      .orderBy('nftCount', 'desc')
-      .limit(limit)
-      .get();
+    let allocationsSnapshot;
+    try {
+      allocationsSnapshot = await collectionRef
+        .where('distributionId', '==', distributionId)
+        .orderBy('nftCount', 'desc')
+        .limit(limit)
+        .get();
+    } catch (indexError) {
+      // If index doesn't exist, fallback to fetching all and sorting in memory
+      console.log('[Leaderboard] Firestore index not found, using fallback query');
+      const allAllocations = await collectionRef
+        .where('distributionId', '==', distributionId)
+        .get();
+      
+      // Sort in memory and limit
+      const sortedDocs = allAllocations.docs
+        .sort((a, b) => (b.data().nftCount || 0) - (a.data().nftCount || 0))
+        .slice(0, limit);
+      
+      allocationsSnapshot = { docs: sortedDocs, empty: sortedDocs.length === 0 };
+    }
     
     if (allocationsSnapshot.empty) {
       console.log('[Leaderboard] No allocations found for this month');
-      return res.json({ leaderboard: [] });
+      return res.json({ 
+        leaderboard: [],
+        message: `No revenue distribution allocations found for ${distributionId}`
+      });
     }
     
     // Build leaderboard with user details
