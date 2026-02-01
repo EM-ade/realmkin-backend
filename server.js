@@ -28,8 +28,8 @@ import cors from "cors";
 import cron from "node-cron";
 import { PublicKey, Connection, Transaction, SystemProgram } from "@solana/web3.js";
 import withdrawalLogger from "./services/withdrawalLogger.js";
-import { sendMkinTokens } from "../utils/mkinTransfer.js";
-import { getSolPriceUSD } from "../utils/solPrice.js";
+import { sendMkinTokens } from "./utils/mkinTransfer.js";
+import { getSolPriceUSD } from "./utils/solPrice.js";
 
 // Initialize Firebase Admin
 console.log("[API] Initializing Firebase Admin...");

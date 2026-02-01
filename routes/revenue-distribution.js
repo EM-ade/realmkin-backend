@@ -488,6 +488,60 @@ router.get('/cache-stats', verifySecretToken, async (req, res) => {
   }
 });
 
+/**
+ * DELETE /api/revenue-distribution/clear-cache
+ * Clear secondary sale verification cache
+ */
+router.delete('/clear-cache', verifySecretToken, async (req, res) => {
+  try {
+    console.log('🗑️  Clearing secondary sale cache...');
+    
+    const db = admin.firestore();
+    const CACHE_COLLECTION = 'secondarySaleCache';
+    
+    const snapshot = await db.collection(CACHE_COLLECTION).get();
+    
+    if (snapshot.empty) {
+      return res.json({
+        success: true,
+        message: 'Cache is already empty',
+        deletedCount: 0,
+      });
+    }
+    
+    console.log(`   Found ${snapshot.size} cached entries, deleting...`);
+    
+    // Delete in batches of 500
+    const batchSize = 500;
+    let deletedCount = 0;
+    
+    for (let i = 0; i < snapshot.docs.length; i += batchSize) {
+      const batch = db.batch();
+      const chunk = snapshot.docs.slice(i, i + batchSize);
+      
+      chunk.forEach(doc => batch.delete(doc.ref));
+      await batch.commit();
+      
+      deletedCount += chunk.length;
+      console.log(`   Deleted ${deletedCount} / ${snapshot.size} entries...`);
+    }
+    
+    console.log(`✅ Cache cleared: ${deletedCount} documents deleted`);
+    
+    res.json({
+      success: true,
+      message: 'Cache cleared successfully',
+      deletedCount,
+    });
+  } catch (error) {
+    console.error('Error clearing cache:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
 // ============================================================================
 // USER ENDPOINTS (Require Firebase Authentication)
 // ============================================================================

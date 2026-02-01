@@ -1,6 +1,6 @@
 import axios from 'axios';
 import admin from 'firebase-admin';
-import magicEdenRateLimiter from '../../utils/magicEdenRateLimiter.js';
+import magicEdenRateLimiter from '../utils/magicEdenRateLimiter.js';
 
 /**
  * Secondary Sale Verification Service
@@ -28,7 +28,7 @@ class SecondarySaleVerificationService {
     this.MAGIC_EDEN_V2_PROGRAM = 'M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K';
     this.MAGIC_EDEN_V1_PROGRAM = 'MEisE1HzehtrDpAAT8PnLHjpSSkRYakotTuJRPjTpo8';
     
-    this.collectionSymbols = ['therealmkin', 'Therealmkin', 'the_realmkin_kins'];
+    this.collectionSymbols = ['the_realmkin'];
   }
 
   // Lazy-initialize Firestore connection
