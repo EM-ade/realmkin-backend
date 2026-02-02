@@ -223,32 +223,15 @@ class StakingService {
     // to avoid excessive reads on every overview call.
     // This change reduces Firebase reads by ~100 per overview call.
 
-    // HOWEVER: Auto-detect boosters on first overview call if user has staked but has no boosters
-    // This ensures users see their boosters immediately after page load
-    if (firebaseUid) {
-      const posRef = this.db.collection(POSITIONS_COLLECTION).doc(firebaseUid);
-      const posDoc = await posRef.get();
-      
-      // If user has a staking position but no boosters detected yet, detect them now
-      if (posDoc.exists) {
-        const posData = posDoc.data();
-        const hasStakedTokens = posData.principal_amount > 0;
-        const hasBoosters = posData.active_boosters && posData.active_boosters.length > 0;
-        
-        if (hasStakedTokens && !hasBoosters) {
-          console.log(`🔍 User ${firebaseUid} has staked but no boosters detected. Auto-detecting now...`);
-          try {
-            const detectedBoosters = await this.boosterService.detectAndAssignBoosters(firebaseUid);
-            if (detectedBoosters && detectedBoosters.length > 0) {
-              console.log(`✨ Auto-detected ${detectedBoosters.length} booster(s): ${detectedBoosters.map(b => b.name).join(', ')}`);
-            }
-          } catch (err) {
-            console.error(`⚠️ Auto-detection failed: ${err.message}`);
-            // Don't fail the overview call if booster detection fails
-          }
-        }
-      }
-    }
+    // OPTIMIZATION: Removed automatic booster detection on overview calls
+    // This was causing excessive Firebase reads (3 reads + 2 writes per user per page load)
+    // Users can manually refresh boosters via: POST /api/boosters/refresh
+    // Savings: ~150 reads/day + 100 writes/day eliminated
+    
+    // Note: Boosters are still detected:
+    // 1. Via periodic refresh job (every 6 hours)
+    // 2. Via manual refresh button in UI
+    // 3. Via admin endpoint: POST /api/boosters/refresh-all
 
     const pool = await this.getPoolData();
 
@@ -685,21 +668,14 @@ class StakingService {
     console.log(`${logPrefix}   - Amount: ${amount} MKIN`);
     console.log(`${"=".repeat(80)}\n`);
 
-    // 7. Automatically detect and assign boosters after successful stake
-    // This runs asynchronously to not block the stake response
-    console.log(`${logPrefix} 🔍 Step 7: Triggering async booster detection...`);
-    this.boosterService.detectAndAssignBoosters(firebaseUid)
-      .then(detectedBoosters => {
-        if (detectedBoosters && detectedBoosters.length > 0) {
-          console.log(`${logPrefix} ✨ Boosters detected: ${detectedBoosters.map(b => b.name).join(', ')}`);
-        } else {
-          console.log(`${logPrefix} 📭 No boosters detected`);
-        }
-      })
-      .catch(err => {
-        console.error(`${logPrefix} ⚠️ Booster detection failed: ${err.message}`);
-        // Don't fail the stake operation if booster detection fails
-      });
+    // OPTIMIZATION: Removed automatic booster refresh after stake
+    // This was causing 3 reads + 2 writes + Helius API call on every stake
+    // Savings: ~60 reads/day + 40 writes/day eliminated
+    
+    // Boosters are still refreshed via:
+    // 1. Periodic job (every 6 hours)
+    // 2. Manual refresh: POST /api/boosters/refresh
+    console.log(`${logPrefix} ℹ️ Boosters will be detected in next periodic refresh (every 6 hours)`);
 
     const result = {
       success: true,

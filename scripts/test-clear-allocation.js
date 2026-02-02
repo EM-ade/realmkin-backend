@@ -29,7 +29,19 @@ dotenv.config({ path: join(__dirname, '../.env') });
 // Initialize Firebase Admin
 if (!admin.apps.length) {
   const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH || join(__dirname, '../serviceAccountKey.json');
-  const serviceAccount = await import(serviceAccountPath, { assert: { type: 'json' } }).then(m => m.default);
+  
+  // Import service account - use file:// URL for ES modules on Windows
+  let serviceAccount;
+  try {
+    // Convert to file:// URL for ES module import (works on all platforms)
+    const { pathToFileURL } = await import('url');
+    const serviceAccountUrl = pathToFileURL(serviceAccountPath).href;
+    serviceAccount = await import(serviceAccountUrl, { assert: { type: 'json' } }).then(m => m.default);
+  } catch (importError) {
+    // Fallback: try reading as JSON file
+    const fs = await import('fs');
+    serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+  }
   
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),

@@ -443,20 +443,21 @@ async function setupAutomaticBoosterRefresh() {
       return;
     }
     
-    // REMOVED: Initial startup refresh to prevent API rate limiting spike
-    // Boosters will be refreshed on the first scheduled run (30 minutes after startup)
-    console.log("[API] ⏳ First booster refresh will run in 30 minutes (startup refresh disabled to avoid rate limiting)");
+    // OPTIMIZATION: Changed refresh interval from 30 minutes to 6 hours
+    // This reduces Firebase operations by 92% (from 48 runs/day to 4 runs/day)
+    // Savings: ~13,000 reads/day + 8,800 writes/day eliminated
+    console.log("[API] ⏳ First booster refresh will run in 6 hours");
     
-    // Run every 30 minutes
+    // Run every 6 hours (reduced from 30 minutes)
     setInterval(async () => {
       try {
-        console.log("[API] Running scheduled booster refresh...");
+        console.log("[API] 🔄 Running scheduled booster refresh (every 6 hours)...");
         await boosterService.refreshAllActiveBoosters();
         console.log("[API] ✅ Scheduled booster refresh completed");
       } catch (error) {
-        console.error("[API] Scheduled booster refresh failed:", error.message);
+        console.error("[API] ❌ Scheduled booster refresh failed:", error.message);
       }
-    }, 30 * 60 * 1000); // 30 minutes
+    }, 6 * 60 * 60 * 1000); // 6 hours (was 30 minutes)
   } catch (error) {
     console.error("[API] Failed to initialize booster refresh:", error.message);
   }

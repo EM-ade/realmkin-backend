@@ -54,15 +54,21 @@ router.get("/mining", async (req, res) => {
         .limit(parseInt(limit))
         .get();
 
+      // OPTIMIZATION: Batch get all usernames to avoid N+1 query
+      // This reduces reads from 11 (1 + 10) to 2 (1 + 1 batch)
+      const userIds = snapshot.docs.map(doc => doc.id);
+      const userDocs = await db.getAll(...userIds.map(id => db.collection("users").doc(id)));
+      const userMap = new Map();
+      userDocs.forEach(doc => {
+        if (doc.exists) {
+          userMap.set(doc.id, doc.data());
+        }
+      });
+
       for (const doc of snapshot.docs) {
         const data = doc.data();
         const userId = doc.id;
-
-        // Get username from users collection (per Firebase schema)
-        const userDoc = await db.collection("users").doc(userId).get();
-        const userData = userDoc.exists ? userDoc.data() : {};
-
-        // Use actual username from users collection
+        const userData = userMap.get(userId) || {};
         let displayName = userData.username || `User${userId.slice(-4)}`;
 
         leaderboard.push({
@@ -94,14 +100,21 @@ router.get("/mining", async (req, res) => {
         .limit(parseInt(limit))
         .get();
 
+      // OPTIMIZATION: Batch get all usernames to avoid N+1 query
+      // This reduces reads from 11 (1 + 10) to 2 (1 + 1 batch)
+      const userIds = snapshot.docs.map(doc => doc.id);
+      const userDocs = await db.getAll(...userIds.map(id => db.collection("users").doc(id)));
+      const userMap = new Map();
+      userDocs.forEach(doc => {
+        if (doc.exists) {
+          userMap.set(doc.id, doc.data());
+        }
+      });
+
       for (const doc of snapshot.docs) {
         const data = doc.data();
         const userId = doc.id;
-
-        // Get username from users collection (per Firebase schema)
-        const userDoc = await db.collection("users").doc(userId).get();
-        const userData = userDoc.exists ? userDoc.data() : {};
-
+        const userData = userMap.get(userId) || {};
         let displayName = userData.username || `User${userId.slice(-4)}`;
 
         leaderboard.push({
