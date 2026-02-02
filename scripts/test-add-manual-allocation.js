@@ -164,20 +164,33 @@ async function addManualAllocation(walletAddress, amountUsd = 5.0) {
     console.log(`   EMPIRE: ${empireShare.toFixed(2)} EMPIRE`);
     console.log(`   MKIN: ${mkinShare.toFixed(2)} MKIN`);
     console.log(`   USD Value: $${amountUsd.toFixed(2)}`);
+    console.log(`   Status: pending (claimable)`);
+    console.log(`   Expires: 30 days from now`);
     
     // Step 5: Create allocation document
     const now = admin.firestore.Timestamp.now();
+    const expiresAt = admin.firestore.Timestamp.fromMillis(now.toMillis() + (30 * 24 * 60 * 60 * 1000)); // 30 days from now
+    
     const allocationData = {
       userId,
       walletAddress,
       distributionId,
       nftCount,
       weight,
+      // Token amounts (matching backend field names)
+      amountSol: solShare,
+      amountEmpire: empireShare,
+      amountMkin: mkinShare,
+      // Legacy field names (for compatibility)
       solShare,
       empireShare,
       mkinShare,
       allocatedAmountUsd: amountUsd,
       eligibleAt: now,
+      expiresAt: expiresAt,
+      // Status field (CRITICAL - backend checks this)
+      status: 'pending',
+      // Legacy claimed field
       claimed: false,
       claimedAt: null,
       claimSignature: null,
