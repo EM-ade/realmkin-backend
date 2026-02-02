@@ -726,6 +726,88 @@ router.get('/check-eligibility', verifyFirebaseAuth, async (req, res) => {
 });
 
 /**
+ * GET /api/revenue-distribution/calculate-fee
+ * Calculate the exact fee needed for claiming (for frontend verification)
+ */
+router.get('/calculate-fee', verifyFirebaseAuth, async (req, res) => {
+  try {
+    const db = admin.firestore();
+    const userId = req.userId;
+    
+    // Get user's wallet address
+    const userDoc = await db.collection(CONFIG.USER_REWARDS_COLLECTION)
+      .doc(userId)
+      .get();
+    
+    if (!userDoc.exists || !userDoc.data().walletAddress) {
+      return res.status(400).json({
+        success: false,
+        error: 'Wallet address not found'
+      });
+    }
+    
+    const walletAddress = userDoc.data().walletAddress;
+    
+    // Check token accounts
+    const connection = getConnection();
+    const userPubkey = new PublicKey(walletAddress);
+    
+    const empireMint = new PublicKey(CONFIG.EMPIRE_MINT);
+    const mkinMint = new PublicKey(CONFIG.MKIN_MINT);
+    
+    const userEmpireAta = await getAssociatedTokenAddress(empireMint, userPubkey);
+    const userMkinAta = await getAssociatedTokenAddress(mkinMint, userPubkey);
+    
+    const [empireAccount, mkinAccount] = await Promise.all([
+      connection.getAccountInfo(userEmpireAta),
+      connection.getAccountInfo(userMkinAta),
+    ]);
+    
+    const needsEmpireAccount = !empireAccount;
+    const needsMkinAccount = !mkinAccount;
+    const accountsToCreate = (needsEmpireAccount ? 1 : 0) + (needsMkinAccount ? 1 : 0);
+    
+    // Calculate fees
+    const { solAmount: baseFeeAmount, usdAmount: baseFeeUsd, solPrice } = await getUsdInSol(CONFIG.CLAIM_FEE_USD);
+    const accountCreationFeeUsd = accountsToCreate * CONFIG.TOKEN_ACCOUNT_CREATION_FEE_USD;
+    const totalExpectedFeeUsd = CONFIG.CLAIM_FEE_USD + accountCreationFeeUsd;
+    const { solAmount: totalExpectedFeeSol } = await getUsdInSol(totalExpectedFeeUsd);
+    
+    console.log(`💵 Fee calculation for user ${userId}:`);
+    console.log(`   Wallet: ${walletAddress}`);
+    console.log(`   Base fee: $${CONFIG.CLAIM_FEE_USD} = ${baseFeeAmount.toFixed(6)} SOL`);
+    console.log(`   Token accounts to create: ${accountsToCreate} (EMPIRE: ${needsEmpireAccount}, MKIN: ${needsMkinAccount})`);
+    console.log(`   Account creation fee: $${accountCreationFeeUsd.toFixed(2)}`);
+    console.log(`   Total fee: $${totalExpectedFeeUsd.toFixed(2)} = ${totalExpectedFeeSol.toFixed(6)} SOL`);
+    console.log(`   SOL price: $${solPrice.toFixed(2)}`);
+    
+    res.json({
+      success: true,
+      baseFeeUsd: CONFIG.CLAIM_FEE_USD,
+      accountCreationFeeUsd,
+      totalFeeUsd: totalExpectedFeeUsd,
+      baseFeeSOL: baseFeeAmount,
+      totalFeeSol: totalExpectedFeeSol,
+      solPrice,
+      accountsToCreate: {
+        empire: needsEmpireAccount,
+        mkin: needsMkinAccount,
+        count: accountsToCreate
+      },
+      empireMint: CONFIG.EMPIRE_MINT,
+      mkinMint: CONFIG.MKIN_MINT,
+    });
+    
+  } catch (error) {
+    console.error('Error calculating fee:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
  * POST /api/revenue-distribution/claim
  * User claims their allocation
  * 
@@ -841,16 +923,57 @@ router.post('/claim', verifyFirebaseAuth, async (req, res) => {
     
     // Step 5: Verify fee payment (with tolerance for price fluctuation and overpayment)
     console.log(`${logPrefix} 🔍 Verifying fee payment...`);
-    const tolerance = 0.20; // 20% tolerance for price fluctuation
-    const overpaymentTolerance = 0.50; // Allow up to 50% overpayment (in case accounts already exist)
+    // UPDATED: Increased tolerance to handle SOL price volatility and timing differences
+    const tolerance = 0.40; // 40% tolerance for price fluctuation (increased from 20%)
+    const overpaymentTolerance = 1.00; // Allow up to 100% overpayment (increased from 50%)
     const minFee = totalExpectedFeeSol * (1 - tolerance);
     const maxFee = totalExpectedFeeSol * (1 + tolerance + overpaymentTolerance);
+    
+    console.log(`${logPrefix}   Validation range: ${minFee.toFixed(6)} SOL - ${maxFee.toFixed(6)} SOL`);
     
     const isValidFee = await verifySolTransfer(feeSignature, minFee, maxFee);
     
     if (!isValidFee) {
       console.error(`${logPrefix} ❌ Fee verification failed`);
       console.error(`${logPrefix}   Expected: ${totalExpectedFeeSol.toFixed(6)} SOL (min: ${minFee.toFixed(6)}, max: ${maxFee.toFixed(6)})`);
+      
+      // Debug: Log what was actually found in the transaction
+      try {
+        const connection = getConnection();
+        const gatekeeperKeypair = Keypair.fromSecretKey(
+          new Uint8Array(JSON.parse(process.env.GATEKEEPER_KEYPAIR))
+        );
+        const tx = await connection.getParsedTransaction(feeSignature, {
+          commitment: 'confirmed',
+          maxSupportedTransactionVersion: 0,
+        });
+        
+        if (tx && tx.meta) {
+          console.error(`${logPrefix}   🔍 Transaction details:`);
+          const instructions = tx.transaction.message.instructions;
+          let foundTransfer = false;
+          for (const ix of instructions) {
+            if (ix.program === 'system' && ix.parsed?.type === 'transfer') {
+              foundTransfer = true;
+              const info = ix.parsed.info;
+              const solAmount = info.lamports / 1e9;
+              console.error(`${logPrefix}     Transfer found: ${solAmount.toFixed(6)} SOL`);
+              console.error(`${logPrefix}     From: ${info.source}`);
+              console.error(`${logPrefix}     To: ${info.destination}`);
+              console.error(`${logPrefix}     Expected destination: ${gatekeeperKeypair.publicKey.toBase58()}`);
+              console.error(`${logPrefix}     Destination match: ${info.destination === gatekeeperKeypair.publicKey.toBase58()}`);
+              console.error(`${logPrefix}     Amount in range: ${solAmount >= minFee && solAmount <= maxFee}`);
+            }
+          }
+          if (!foundTransfer) {
+            console.error(`${logPrefix}     No SOL transfer instruction found in transaction`);
+          }
+        } else {
+          console.error(`${logPrefix}   Transaction not found or has no metadata`);
+        }
+      } catch (debugError) {
+        console.error(`${logPrefix}   Could not fetch transaction for debugging:`, debugError.message);
+      }
       
       // Log failed attempt to transaction history
       await db.collection('transactionHistory').add({
