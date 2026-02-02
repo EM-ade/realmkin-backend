@@ -608,43 +608,138 @@ router.post('/refresh-secondary-market', verifyFirebaseAuth, async (req, res) =>
     const db = admin.firestore();
     const collectionSymbol = req.body.collectionSymbol || 'the_realmkin';
     
-    // Step 1: Get ALL collection holders from Magic Eden in single API call
-    console.log(`📊 [REFRESH-${requestId}] Step 1: Fetching holder stats from Magic Eden...`);
-    console.log(`   Collection: ${collectionSymbol}`);
-    
-    const holderStats = await secondarySaleVerificationService.getCollectionHolderStats(collectionSymbol);
-    console.log(`   ✅ Found ${holderStats.length} total holders`);
-    
-    // Step 2: Update cache with holder data (batch write for efficiency)
-    console.log(`📊 [REFRESH-${requestId}] Step 2: Updating cache with holder data...`);
-    
-    // Batch writes (max 500 per batch)
-    const BATCH_SIZE = 500;
-    let updatedCount = 0;
-    
-    for (let i = 0; i < holderStats.length; i += BATCH_SIZE) {
-      const batch = db.batch();
-      const chunk = holderStats.slice(i, i + BATCH_SIZE);
+    // Step 0: Clear old cache data to avoid mixing holder stats with buyer stats
+    console.log(`📊 [REFRESH-${requestId}] Step 0: Clearing old cache data...`);
+    const oldCacheSnapshot = await db.collection('secondarySaleCache').get();
+    if (!oldCacheSnapshot.empty) {
+      console.log(`   Found ${oldCacheSnapshot.size} old cache entries, clearing...`);
+      const batchSize = 500;
+      let deletedCount = 0;
       
-      for (const holder of chunk) {
-        const cacheRef = db.collection('secondarySaleCache').doc(holder.ownerAddress);
+      for (let i = 0; i < oldCacheSnapshot.docs.length; i += batchSize) {
+        const batch = db.batch();
+        const chunk = oldCacheSnapshot.docs.slice(i, i + batchSize);
+        chunk.forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+        deletedCount += chunk.length;
+        console.log(`   Deleted ${deletedCount}/${oldCacheSnapshot.size}...`);
+      }
+      console.log(`   ✅ Cleared ${deletedCount} old entries`);
+    } else {
+      console.log(`   ✅ Cache already empty`);
+    }
+    
+    // Get registered users for fallback
+    const userRewardsSnapshot = await db.collection('userRewards')
+      .where('walletAddress', '!=', null)
+      .get();
+    
+    const walletsToRefresh = [];
+    userRewardsSnapshot.forEach(doc => {
+      const data = doc.data();
+      if (data.walletAddress) {
+        walletsToRefresh.push({ userId: doc.id, wallet: data.walletAddress });
+      }
+    });
+    
+    console.log(`   Found ${walletsToRefresh.length} registered wallets`);
+    
+    // Step 1: Fetch secondary market activities from Magic Eden
+    console.log(`📊 [REFRESH-${requestId}] Step 1: Fetching buyNow activities from Magic Eden...`);
+    console.log(`   Collection: ${collectionSymbol}`);
+    console.log(`   Strategy: Try collection-wide first, fallback to per-wallet if needed`);
+    
+    let buyTransactions = [];
+    let usedCollectionApi = false;
+    
+    try {
+      // Try collection-wide activities API first
+      console.log(`   🔄 Attempting collection-wide activities fetch...`);
+      buyTransactions = await secondarySaleVerificationService.getCollectionActivities(collectionSymbol, { limit: 500 });
+      usedCollectionApi = true;
+      console.log(`   ✅ Collection API successful: ${buyTransactions.length} buyNow transactions found`);
+    } catch (collectionError) {
+      console.warn(`   ⚠️ Collection API failed: ${collectionError.message}`);
+      console.log(`   🔄 Falling back to per-wallet verification...`);
+      
+      // Fallback: Check registered users individually
+      const verificationResults = await secondarySaleVerificationService.batchVerifyUsers(
+        walletsToRefresh.map(u => u.wallet)
+      );
+      
+      // Per-wallet API already updates cache, so we just use those results
+      buyTransactions = verificationResults
+        .filter(r => r.hasSecondarySale)
+        .map(r => ({ buyer: r.wallet }));
+      
+      console.log(`   ✅ Per-wallet verification complete: ${buyTransactions.length} wallets with purchases`);
+    }
+    
+    // Step 2: Aggregate buyers and their purchase counts
+    console.log(`📊 [REFRESH-${requestId}] Step 2: Aggregating buyer data...`);
+    
+    const buyerMap = new Map();
+    
+    if (usedCollectionApi) {
+      // Count purchases per buyer from transactions
+      for (const tx of buyTransactions) {
+        const buyer = tx.buyer;
+        if (!buyerMap.has(buyer)) {
+          buyerMap.set(buyer, { count: 0, lastPurchase: tx.blockTime || Date.now() });
+        }
+        const data = buyerMap.get(buyer);
+        data.count++;
+        // Track most recent purchase
+        if (tx.blockTime && tx.blockTime > data.lastPurchase) {
+          data.lastPurchase = tx.blockTime;
+        }
+      }
+    } else {
+      // Use cached data from per-wallet verification
+      for (const wallet of walletsToRefresh) {
+        const cached = await secondarySaleVerificationService.getCachedResult(wallet.wallet);
+        if (cached && cached.hasSecondarySale) {
+          buyerMap.set(wallet.wallet, { 
+            count: cached.salesCount || 0, 
+            lastPurchase: cached.lastCheckedAt?.toMillis() || Date.now() 
+          });
+        }
+      }
+    }
+    
+    console.log(`   ✅ Found ${buyerMap.size} unique buyers`);
+    
+    // Step 3: Update cache with buyer data
+    console.log(`📊 [REFRESH-${requestId}] Step 3: Updating cache with buyer data...`);
+    
+    let updatedCount = 0;
+    const BATCH_SIZE = 500;
+    const buyerEntries = Array.from(buyerMap.entries());
+    
+    for (let i = 0; i < buyerEntries.length; i += BATCH_SIZE) {
+      const batchBuyers = buyerEntries.slice(i, i + BATCH_SIZE);
+      const batch = db.batch();
+      
+      for (const [walletAddress, data] of batchBuyers) {
+        const cacheRef = db.collection('secondarySaleCache').doc(walletAddress);
         batch.set(cacheRef, {
-          walletAddress: holder.ownerAddress,
-          salesCount: holder.count,
+          walletAddress,
+          salesCount: data.count,
           lastCheckedAt: admin.firestore.Timestamp.now(),
-          hasSecondarySale: holder.count > 0,
+          hasSecondarySale: data.count > 0,
+          lastPurchaseTime: admin.firestore.Timestamp.fromMillis(data.lastPurchase),
         }, { merge: true });
         updatedCount++;
       }
       
       await batch.commit();
-      console.log(`   Batch ${Math.floor(i / BATCH_SIZE) + 1}: Updated ${chunk.length} records`);
+      console.log(`   Batch ${Math.floor(i / BATCH_SIZE) + 1}: Updated ${batchBuyers.length} records`);
     }
     
-    console.log(`   ✅ Total updated: ${updatedCount} holder records`);
+    console.log(`   ✅ Total updated: ${updatedCount} buyer records`);
     
-    // Step 3: Invalidate leaderboard cache to force fresh data
-    console.log(`📊 [REFRESH-${requestId}] Step 3: Invalidating leaderboard cache...`);
+    // Step 6: Invalidate leaderboard cache to force fresh data
+    console.log(`📊 [REFRESH-${requestId}] Step 6: Invalidating leaderboard cache...`);
     try {
       // Import leaderboard cache invalidation
       const leaderboardModule = await import('./leaderboard.js');
@@ -658,27 +753,30 @@ router.post('/refresh-secondary-market', verifyFirebaseAuth, async (req, res) =>
     
     // Step 4: Get cache stats
     const cacheStats = await secondarySaleVerificationService.getCacheStats();
-    const withSalesCount = holderStats.filter(h => h.count > 0).length;
+    const withSalesCount = Array.from(buyerMap.values()).filter(d => d.count > 0).length;
     
     console.log(`${'='.repeat(80)}`);
     console.log(`✅ [REFRESH-${requestId}] Secondary Market Cache Refresh Complete`);
-    console.log(`   Total holders: ${holderStats.length}`);
-    console.log(`   With NFTs: ${withSalesCount}`);
-    console.log(`   Cache entries: ${updatedCount}`);
-    console.log(`   API calls: 1 (vs ~${Math.ceil(holderStats.length / 10)} with old method)`);
-    console.log(`   Time saved: ~${Math.ceil(holderStats.length / 10) * 6} seconds`);
+    console.log(`   Total buyers: ${buyerMap.size}`);
+    console.log(`   With purchases: ${withSalesCount}`);
+    console.log(`   Total transactions: ${buyTransactions.length}`);
+    console.log(`   Cache entries updated: ${updatedCount}`);
+    console.log(`   API calls: ${usedCollectionApi ? 1 : Math.ceil(walletsToRefresh.length / 10)}`);
+    console.log(`   Method: ${usedCollectionApi ? 'collection_activities' : 'per_wallet_activities'}`);
     console.log(`   Cache stats:`, cacheStats);
     console.log(`${'='.repeat(80)}\n`);
     
     res.json({
       success: true,
-      message: 'Secondary market cache refreshed successfully using holder_stats API',
+      message: 'Secondary market cache refreshed successfully using activities API',
       stats: {
-        totalHolders: holderStats.length,
-        withNFTs: withSalesCount,
+        totalBuyers: buyerMap.size,
+        withPurchases: withSalesCount,
+        totalTransactions: buyTransactions.length,
         cacheUpdated: updatedCount,
-        apiCalls: 1,
-        method: 'holder_stats',
+        apiCalls: usedCollectionApi ? 1 : Math.ceil(walletsToRefresh.length / 10),
+        method: usedCollectionApi ? 'collection_activities' : 'per_wallet_activities',
+        fallbackUsed: !usedCollectionApi,
         cacheStats,
       }
     });

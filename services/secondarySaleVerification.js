@@ -183,17 +183,15 @@ class SecondarySaleVerificationService {
           return false;
         }
 
-        // Look for secondary market purchases (buyNow, acceptBid transactions)
-        // Exclude mint transactions (listing, minting from creator)
+        // Look for secondary market purchases (buyNow transactions)
+        // Exclude mint, list, and other non-purchase activities
         const secondaryTransactions = response.data.filter(activity => {
           const type = activity.type?.toLowerCase();
-          const source = activity.source?.toLowerCase();
+          const buyer = activity.buyer; // Must have a buyer field
           
-          // Secondary sale indicators:
-          // - type: 'buyNow', 'acceptBid', 'buy'
-          // - Not from initial mint/listing
-          const isSecondaryType = ['buynow', 'acceptbid', 'buy'].includes(type);
-          const isFromMarketplace = source && source.includes('magiceden');
+          // Only count buyNow transactions (actual purchases)
+          // acceptBid is seller accepting, not buyer purchasing
+          const isBuyTransaction = type === 'buynow' && buyer;
           
           // Check if it's one of our collections
           const collectionSymbol = activity.collection || activity.collectionSymbol;
@@ -201,7 +199,7 @@ class SecondarySaleVerificationService {
             collectionSymbol?.toLowerCase().includes(symbol.toLowerCase())
           );
           
-          return isSecondaryType && isFromMarketplace && isRealmkinCollection;
+          return isBuyTransaction && isRealmkinCollection;
         });
 
         const salesCount = secondaryTransactions.length;
@@ -317,6 +315,71 @@ class SecondarySaleVerificationService {
     const expiresAt = cachedData.cacheExpiresAt.toMillis();
     
     return now > expiresAt;
+  }
+
+  /**
+   * Get collection activities from Magic Eden
+   * Returns buyNow transactions to track secondary market buyers
+   * 
+   * @param {string} collectionSymbol - Magic Eden collection symbol
+   * @param {Object} options - Query options
+   * @param {number} options.limit - Max results per page (default: 500)
+   * @param {number} options.offset - Pagination offset
+   * @returns {Promise<Array>} - Array of { buyer, tokenMint, price, blockTime, signature }
+   */
+  async getCollectionActivities(collectionSymbol = 'the_realmkin', options = {}) {
+    try {
+      const { limit = 500, offset = 0 } = options;
+      console.log(`📊 Fetching collection activities for: ${collectionSymbol} (limit: ${limit}, offset: ${offset})`);
+      
+      const url = `https://api-mainnet.magiceden.dev/v2/collections/${collectionSymbol}/activities`;
+      
+      // Use rate limiter to execute API call
+      const response = await this.rateLimiter.execute(async () => {
+        return await axios.get(url, {
+          headers: {
+            'Accept': 'application/json',
+          },
+          params: {
+            offset,
+            limit,
+          },
+          timeout: 30000, // 30 second timeout
+        });
+      });
+      
+      if (!response.data || !Array.isArray(response.data)) {
+        throw new Error('No data returned from Magic Eden activities endpoint');
+      }
+      
+      const activities = response.data;
+      console.log(`📦 Received ${activities.length} activities`);
+      
+      // Filter for buyNow transactions only (actual secondary market purchases)
+      const buyTransactions = activities.filter(activity => {
+        const type = activity.type?.toLowerCase();
+        const buyer = activity.buyer;
+        
+        // Only count buyNow transactions with a buyer
+        return type === 'buynow' && buyer;
+      });
+      
+      console.log(`✅ Found ${buyTransactions.length} buyNow transactions`);
+      
+      // Return relevant transaction data
+      return buyTransactions.map(tx => ({
+        buyer: tx.buyer,
+        tokenMint: tx.tokenMint,
+        price: tx.price || 0,
+        blockTime: tx.blockTime,
+        signature: tx.signature,
+        source: tx.source || 'unknown',
+      }));
+      
+    } catch (error) {
+      console.error(`❌ Error fetching activities for ${collectionSymbol}:`, error.message);
+      throw error;
+    }
   }
 
   /**
