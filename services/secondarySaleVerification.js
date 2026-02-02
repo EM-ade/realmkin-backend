@@ -320,6 +320,66 @@ class SecondarySaleVerificationService {
   }
 
   /**
+   * Get collection holder stats from Magic Eden
+   * Returns all holders and their NFT counts in a single API call
+   * 
+   * @param {string} collectionSymbol - Magic Eden collection symbol
+   * @returns {Promise<Array>} - Array of { ownerAddress, count }
+   */
+  async getCollectionHolderStats(collectionSymbol = 'the_realmkin') {
+    try {
+      console.log(`📊 Fetching holder stats for collection: ${collectionSymbol}`);
+      
+      const url = `https://api-mainnet.magiceden.dev/v2/collections/${collectionSymbol}/holder_stats`;
+      
+      // Use rate limiter to execute API call
+      const response = await this.rateLimiter.execute(async () => {
+        return await axios.get(url, {
+          headers: {
+            'Accept': 'application/json',
+          },
+          timeout: 30000, // 30 second timeout
+        });
+      });
+      
+      if (!response.data) {
+        throw new Error('No data returned from Magic Eden holder_stats');
+      }
+      
+      // Handle Magic Eden response format
+      // Response structure: { symbol, totalSupply, uniqueHolders, topHolders: [{owner, tokens}, ...] }
+      let holders = response.data;
+      if (!Array.isArray(holders)) {
+        if (holders.topHolders && Array.isArray(holders.topHolders)) {
+          console.log(`📊 Collection stats: ${holders.uniqueHolders} unique holders, ${holders.totalSupply} total supply`);
+          holders = holders.topHolders;
+        } else if (holders.holders && Array.isArray(holders.holders)) {
+          holders = holders.holders;
+        } else if (holders.results && Array.isArray(holders.results)) {
+          holders = holders.results;
+        } else {
+          throw new Error('Unexpected response format from Magic Eden holder_stats');
+        }
+      }
+      
+      console.log(`✅ Received holder stats: ${holders.length} holders`);
+      
+      // Return holders sorted by NFT count (descending)
+      return holders
+        .map(holder => ({
+          ownerAddress: holder.owner || holder.ownerAddress || holder.address,
+          count: holder.tokens || holder.count || holder.amount || 0,
+        }))
+        .filter(h => h.ownerAddress && h.count > 0)
+        .sort((a, b) => b.count - a.count);
+      
+    } catch (error) {
+      console.error(`❌ Error fetching holder stats for ${collectionSymbol}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Get cache statistics
    * 
    * @returns {Promise<Object>} - Cache stats

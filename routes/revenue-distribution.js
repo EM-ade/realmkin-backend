@@ -593,6 +593,105 @@ router.delete('/clear-allocations', verifySecretToken, async (req, res) => {
 });
 
 /**
+ * POST /api/revenue-distribution/refresh-secondary-market
+ * Manually refresh secondary sale cache using Magic Eden holder_stats API
+ * Single API call gets ALL holders - much faster than per-wallet checks
+ * Available to all authenticated users for refreshing leaderboard
+ */
+router.post('/refresh-secondary-market', verifyFirebaseAuth, async (req, res) => {
+  try {
+    const requestId = Date.now();
+    console.log(`\n${'='.repeat(80)}`);
+    console.log(`🔄 [REFRESH-${requestId}] Secondary Market Cache Refresh Started (Using holder_stats API)`);
+    console.log(`${'='.repeat(80)}`);
+    
+    const db = admin.firestore();
+    const collectionSymbol = req.body.collectionSymbol || 'the_realmkin';
+    
+    // Step 1: Get ALL collection holders from Magic Eden in single API call
+    console.log(`📊 [REFRESH-${requestId}] Step 1: Fetching holder stats from Magic Eden...`);
+    console.log(`   Collection: ${collectionSymbol}`);
+    
+    const holderStats = await secondarySaleVerificationService.getCollectionHolderStats(collectionSymbol);
+    console.log(`   ✅ Found ${holderStats.length} total holders`);
+    
+    // Step 2: Update cache with holder data (batch write for efficiency)
+    console.log(`📊 [REFRESH-${requestId}] Step 2: Updating cache with holder data...`);
+    
+    // Batch writes (max 500 per batch)
+    const BATCH_SIZE = 500;
+    let updatedCount = 0;
+    
+    for (let i = 0; i < holderStats.length; i += BATCH_SIZE) {
+      const batch = db.batch();
+      const chunk = holderStats.slice(i, i + BATCH_SIZE);
+      
+      for (const holder of chunk) {
+        const cacheRef = db.collection('secondarySaleCache').doc(holder.ownerAddress);
+        batch.set(cacheRef, {
+          walletAddress: holder.ownerAddress,
+          salesCount: holder.count,
+          lastCheckedAt: admin.firestore.Timestamp.now(),
+          hasSecondarySale: holder.count > 0,
+        }, { merge: true });
+        updatedCount++;
+      }
+      
+      await batch.commit();
+      console.log(`   Batch ${Math.floor(i / BATCH_SIZE) + 1}: Updated ${chunk.length} records`);
+    }
+    
+    console.log(`   ✅ Total updated: ${updatedCount} holder records`);
+    
+    // Step 3: Invalidate leaderboard cache to force fresh data
+    console.log(`📊 [REFRESH-${requestId}] Step 3: Invalidating leaderboard cache...`);
+    try {
+      // Import leaderboard cache invalidation
+      const leaderboardModule = await import('./leaderboard.js');
+      if (leaderboardModule.invalidateSecondaryMarketCache) {
+        leaderboardModule.invalidateSecondaryMarketCache();
+        console.log(`   ✅ Leaderboard cache invalidated`);
+      }
+    } catch (err) {
+      console.warn(`   ⚠️ Could not invalidate leaderboard cache:`, err.message);
+    }
+    
+    // Step 4: Get cache stats
+    const cacheStats = await secondarySaleVerificationService.getCacheStats();
+    const withSalesCount = holderStats.filter(h => h.count > 0).length;
+    
+    console.log(`${'='.repeat(80)}`);
+    console.log(`✅ [REFRESH-${requestId}] Secondary Market Cache Refresh Complete`);
+    console.log(`   Total holders: ${holderStats.length}`);
+    console.log(`   With NFTs: ${withSalesCount}`);
+    console.log(`   Cache entries: ${updatedCount}`);
+    console.log(`   API calls: 1 (vs ~${Math.ceil(holderStats.length / 10)} with old method)`);
+    console.log(`   Time saved: ~${Math.ceil(holderStats.length / 10) * 6} seconds`);
+    console.log(`   Cache stats:`, cacheStats);
+    console.log(`${'='.repeat(80)}\n`);
+    
+    res.json({
+      success: true,
+      message: 'Secondary market cache refreshed successfully using holder_stats API',
+      stats: {
+        totalHolders: holderStats.length,
+        withNFTs: withSalesCount,
+        cacheUpdated: updatedCount,
+        apiCalls: 1,
+        method: 'holder_stats',
+        cacheStats,
+      }
+    });
+  } catch (error) {
+    console.error('Error refreshing secondary market cache:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
  * DELETE /api/revenue-distribution/clear-cache
  * Clear secondary sale verification cache
  */

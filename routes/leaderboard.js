@@ -31,6 +31,23 @@ function setCachedData(cacheKey, data) {
 }
 
 /**
+ * Invalidate secondary market cache
+ * Called when secondary sale cache is refreshed
+ */
+export function invalidateSecondaryMarketCache() {
+  const keysToInvalidate = Object.keys(leaderboardCache).filter(key => 
+    key.startsWith('secondaryMarket')
+  );
+  
+  keysToInvalidate.forEach(key => {
+    leaderboardCache[key] = { data: null, timestamp: 0 };
+  });
+  
+  console.log(`[Leaderboard] Invalidated ${keysToInvalidate.length} secondary market cache entries`);
+  return keysToInvalidate.length;
+}
+
+/**
  * GET /leaderboard/mining
  * Returns top miners based on total claimed rewards or current staked amount
  */
