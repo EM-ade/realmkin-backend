@@ -13,11 +13,12 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 function getCachedData(cacheKey) {
   const cached = leaderboardCache[cacheKey];
-  if (cached.data && Date.now() - cached.timestamp < CACHE_DURATION) {
+  // Check if cached exists and has valid data
+  if (cached && cached.data && Date.now() - cached.timestamp < CACHE_DURATION) {
     console.log(`[Leaderboard] Cache HIT for ${cacheKey} (age: ${Math.floor((Date.now() - cached.timestamp) / 1000)}s)`);
     return cached.data;
   }
-  console.log(`[Leaderboard] Cache MISS for ${cacheKey}`);
+  console.log(`[Leaderboard] Cache MISS for ${cacheKey} (cached: ${!!cached}, hasData: ${!!(cached?.data)})`);
   return null;
 }
 
@@ -382,14 +383,17 @@ router.get('/secondary-market', async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const cacheKey = `secondaryMarket_top${limit}`;
     
+    console.log(`[Leaderboard] Secondary market leaderboard request (limit: ${limit})`);
+    
     // Check cache first
     const cached = getCachedData(cacheKey);
     if (cached) {
+      console.log(`[Leaderboard] Returning cached secondary market data`);
       return res.json(cached);
     }
     
     const db = admin.firestore();
-    console.log(`[Leaderboard] Fetching top ${limit} secondary market buyers from cache`);
+    console.log(`[Leaderboard] Fetching top ${limit} secondary market buyers from database`);
     
     // Query all cached entries (can't filter by salesCount in query without index)
     const cacheRef = db.collection('secondarySaleCache');
