@@ -608,25 +608,27 @@ router.post('/refresh-secondary-market', verifyFirebaseAuth, async (req, res) =>
     const db = admin.firestore();
     const collectionSymbol = req.body.collectionSymbol || 'the_realmkin';
     
-    // Step 0: Clear old cache data to avoid mixing holder stats with buyer stats
-    console.log(`📊 [REFRESH-${requestId}] Step 0: Clearing old cache data...`);
-    const oldCacheSnapshot = await db.collection('secondarySaleCache').get();
-    if (!oldCacheSnapshot.empty) {
-      console.log(`   Found ${oldCacheSnapshot.size} old cache entries, clearing...`);
-      const batchSize = 500;
-      let deletedCount = 0;
+    // Step 0: Get last fetch metadata for incremental updates
+    console.log(`📊 [REFRESH-${requestId}] Step 0: Checking last fetch metadata...`);
+    const metadataRef = db.collection('secondarySaleCache').doc('_metadata');
+    const metadataDoc = await metadataRef.get();
+    
+    let lastFetchBlockTime = null;
+    let isFirstFetch = false;
+    
+    if (metadataDoc.exists) {
+      const metadata = metadataDoc.data();
+      lastFetchBlockTime = metadata.lastBlockTime || null;
+      const lastFetchDate = metadata.lastFetchedAt?.toDate();
       
-      for (let i = 0; i < oldCacheSnapshot.docs.length; i += batchSize) {
-        const batch = db.batch();
-        const chunk = oldCacheSnapshot.docs.slice(i, i + batchSize);
-        chunk.forEach(doc => batch.delete(doc.ref));
-        await batch.commit();
-        deletedCount += chunk.length;
-        console.log(`   Deleted ${deletedCount}/${oldCacheSnapshot.size}...`);
-      }
-      console.log(`   ✅ Cleared ${deletedCount} old entries`);
+      console.log(`   ✅ Found previous fetch metadata:`);
+      console.log(`      Last block time: ${lastFetchBlockTime ? new Date(lastFetchBlockTime * 1000).toISOString() : 'N/A'}`);
+      console.log(`      Last fetched at: ${lastFetchDate ? lastFetchDate.toISOString() : 'N/A'}`);
+      console.log(`      Mode: INCREMENTAL (fetch only new activities)`);
     } else {
-      console.log(`   ✅ Cache already empty`);
+      isFirstFetch = true;
+      console.log(`   🌟 First fetch detected - will fetch ALL-TIME history`);
+      console.log(`      Mode: ALL-TIME (complete collection history)`);
     }
     
     // Get registered users for fallback
@@ -647,16 +649,27 @@ router.post('/refresh-secondary-market', verifyFirebaseAuth, async (req, res) =>
     // Step 1: Fetch secondary market activities from Magic Eden
     console.log(`📊 [REFRESH-${requestId}] Step 1: Fetching buyNow activities from Magic Eden...`);
     console.log(`   Collection: ${collectionSymbol}`);
-    console.log(`   Strategy: Try collection-wide first, fallback to per-wallet if needed`);
+    console.log(`   Strategy: ${isFirstFetch ? 'ALL-TIME fetch' : 'INCREMENTAL fetch (new activities only)'}`);
     
     let buyTransactions = [];
     let usedCollectionApi = false;
+    let mostRecentBlockTime = lastFetchBlockTime;
     
     try {
-      // Try collection-wide activities API first
-      console.log(`   🔄 Attempting collection-wide activities fetch...`);
-      buyTransactions = await secondarySaleVerificationService.getCollectionActivities(collectionSymbol, { limit: 500 });
+      // Try collection-wide activities API
+      console.log(`   🔄 Fetching activities...`);
+      buyTransactions = await secondarySaleVerificationService.getCollectionActivities(collectionSymbol, { 
+        limit: 500,
+        sinceBlockTime: lastFetchBlockTime // null for first fetch (all-time), timestamp for incremental
+      });
       usedCollectionApi = true;
+      
+      // Track the most recent blockTime for next incremental fetch
+      if (buyTransactions.length > 0) {
+        mostRecentBlockTime = Math.max(...buyTransactions.map(tx => tx.blockTime));
+        console.log(`   📌 Most recent transaction: ${new Date(mostRecentBlockTime * 1000).toISOString()}`);
+      }
+      
       console.log(`   ✅ Collection API successful: ${buyTransactions.length} buyNow transactions found`);
     } catch (collectionError) {
       console.warn(`   ⚠️ Collection API failed: ${collectionError.message}`);
@@ -738,8 +751,20 @@ router.post('/refresh-secondary-market', verifyFirebaseAuth, async (req, res) =>
     
     console.log(`   ✅ Total updated: ${updatedCount} buyer records`);
     
-    // Step 6: Invalidate leaderboard cache to force fresh data
-    console.log(`📊 [REFRESH-${requestId}] Step 6: Invalidating leaderboard cache...`);
+    // Step 4: Update metadata for next incremental fetch
+    console.log(`📊 [REFRESH-${requestId}] Step 4: Updating fetch metadata...`);
+    await metadataRef.set({
+      lastBlockTime: mostRecentBlockTime,
+      lastFetchedAt: admin.firestore.Timestamp.now(),
+      totalBuyers: buyerMap.size,
+      totalTransactions: buyTransactions.length,
+      collectionSymbol,
+      fetchMode: isFirstFetch ? 'all-time' : 'incremental'
+    }, { merge: true });
+    console.log(`   ✅ Metadata updated for next incremental fetch`);
+    
+    // Step 5: Invalidate leaderboard cache to force fresh data
+    console.log(`📊 [REFRESH-${requestId}] Step 5: Invalidating leaderboard cache...`);
     try {
       // Import leaderboard cache invalidation
       const leaderboardModule = await import('./leaderboard.js');
@@ -751,32 +776,35 @@ router.post('/refresh-secondary-market', verifyFirebaseAuth, async (req, res) =>
       console.warn(`   ⚠️ Could not invalidate leaderboard cache:`, err.message);
     }
     
-    // Step 4: Get cache stats
+    // Step 6: Get cache stats
     const cacheStats = await secondarySaleVerificationService.getCacheStats();
     const withSalesCount = Array.from(buyerMap.values()).filter(d => d.count > 0).length;
     
     console.log(`${'='.repeat(80)}`);
     console.log(`✅ [REFRESH-${requestId}] Secondary Market Cache Refresh Complete`);
+    console.log(`   Mode: ${isFirstFetch ? 'ALL-TIME (first fetch)' : 'INCREMENTAL (new data only)'}`);
     console.log(`   Total buyers: ${buyerMap.size}`);
     console.log(`   With purchases: ${withSalesCount}`);
     console.log(`   Total transactions: ${buyTransactions.length}`);
     console.log(`   Cache entries updated: ${updatedCount}`);
-    console.log(`   API calls: ${usedCollectionApi ? 1 : Math.ceil(walletsToRefresh.length / 10)}`);
+    console.log(`   API calls: ${usedCollectionApi ? 'Dynamic (paginated)' : Math.ceil(walletsToRefresh.length / 10)}`);
     console.log(`   Method: ${usedCollectionApi ? 'collection_activities' : 'per_wallet_activities'}`);
+    console.log(`   Most recent activity: ${mostRecentBlockTime ? new Date(mostRecentBlockTime * 1000).toISOString() : 'N/A'}`);
     console.log(`   Cache stats:`, cacheStats);
     console.log(`${'='.repeat(80)}\n`);
     
     res.json({
       success: true,
-      message: 'Secondary market cache refreshed successfully using activities API',
+      message: `Secondary market cache refreshed successfully - ${isFirstFetch ? 'ALL-TIME history fetched' : 'Incremental update completed'}`,
       stats: {
+        mode: isFirstFetch ? 'all-time' : 'incremental',
         totalBuyers: buyerMap.size,
         withPurchases: withSalesCount,
         totalTransactions: buyTransactions.length,
         cacheUpdated: updatedCount,
-        apiCalls: usedCollectionApi ? 1 : Math.ceil(walletsToRefresh.length / 10),
         method: usedCollectionApi ? 'collection_activities' : 'per_wallet_activities',
         fallbackUsed: !usedCollectionApi,
+        mostRecentActivity: mostRecentBlockTime ? new Date(mostRecentBlockTime * 1000).toISOString() : null,
         cacheStats,
       }
     });

@@ -320,54 +320,114 @@ class SecondarySaleVerificationService {
   /**
    * Get collection activities from Magic Eden
    * Returns buyNow transactions to track secondary market buyers
+   * Fetches ALL-TIME data with incremental updates (only new activities after first fetch)
    * 
    * @param {string} collectionSymbol - Magic Eden collection symbol
    * @param {Object} options - Query options
    * @param {number} options.limit - Max results per page (default: 500)
-   * @param {number} options.offset - Pagination offset
+   * @param {number} options.sinceBlockTime - Only fetch activities after this timestamp (optional)
    * @returns {Promise<Array>} - Array of { buyer, tokenMint, price, blockTime, signature }
    */
   async getCollectionActivities(collectionSymbol = 'the_realmkin', options = {}) {
     try {
-      const { limit = 500, offset = 0 } = options;
-      console.log(`📊 Fetching collection activities for: ${collectionSymbol} (limit: ${limit}, offset: ${offset})`);
+      const { limit = 500, sinceBlockTime = null } = options;
+      
+      const now = new Date();
+      
+      console.log(`📊 Fetching collection activities for: ${collectionSymbol}`);
+      
+      if (sinceBlockTime) {
+        const sinceDate = new Date(sinceBlockTime * 1000);
+        console.log(`   🔄 INCREMENTAL MODE: Fetching only NEW activities`);
+        console.log(`   ⏰ Since: ${sinceDate.toISOString()}`);
+        console.log(`   📊 Time range: Last ${Math.round((Date.now() / 1000 - sinceBlockTime) / 86400)} days`);
+      } else {
+        console.log(`   🌍 ALL-TIME MODE: Fetching complete history`);
+        console.log(`   ⏰ Starting from: Collection launch`);
+      }
       
       const url = `https://api-mainnet.magiceden.dev/v2/collections/${collectionSymbol}/activities`;
       
-      // Use rate limiter to execute API call
-      const response = await this.rateLimiter.execute(async () => {
-        return await axios.get(url, {
-          headers: {
-            'Accept': 'application/json',
-          },
-          params: {
-            offset,
-            limit,
-          },
-          timeout: 30000, // 30 second timeout
-        });
-      });
+      let allBuyTransactions = [];
+      let currentOffset = 0;
+      let totalFetched = 0;
+      let pageCount = 0;
+      let shouldStop = false;
       
-      if (!response.data || !Array.isArray(response.data)) {
-        throw new Error('No data returned from Magic Eden activities endpoint');
+      // Paginate until we reach sinceBlockTime or end of data
+      while (!shouldStop) {
+        pageCount++;
+        console.log(`   📄 Fetching page ${pageCount} (offset: ${currentOffset})...`);
+        
+        // Use rate limiter to execute API call
+        const response = await this.rateLimiter.execute(async () => {
+          return await axios.get(url, {
+            headers: {
+              'Accept': 'application/json',
+            },
+            params: {
+              offset: currentOffset,
+              limit,
+            },
+            timeout: 30000, // 30 second timeout
+          });
+        });
+        
+        if (!response.data || !Array.isArray(response.data)) {
+          throw new Error('No data returned from Magic Eden activities endpoint');
+        }
+        
+        const activities = response.data;
+        totalFetched += activities.length;
+        console.log(`      Received ${activities.length} activities (total: ${totalFetched})`);
+        
+        // Filter for buyNow transactions only
+        const buyTransactions = activities.filter(activity => {
+          const type = activity.type?.toLowerCase();
+          const buyer = activity.buyer;
+          return type === 'buynow' && buyer;
+        });
+        
+        console.log(`      Found ${buyTransactions.length} buyNow transactions`);
+        
+        // If we have a sinceBlockTime, stop when we reach it
+        if (sinceBlockTime && buyTransactions.length > 0) {
+          const oldestTx = buyTransactions[buyTransactions.length - 1];
+          
+          if (oldestTx.blockTime <= sinceBlockTime) {
+            // Filter to only include NEW transactions (after sinceBlockTime)
+            const newTxs = buyTransactions.filter(tx => tx.blockTime > sinceBlockTime);
+            allBuyTransactions.push(...newTxs);
+            console.log(`      ⏰ Reached last fetch point (${new Date(sinceBlockTime * 1000).toISOString()})`);
+            console.log(`      ✓ Added ${newTxs.length} new transactions`);
+            shouldStop = true;
+            break;
+          }
+        }
+        
+        allBuyTransactions.push(...buyTransactions);
+        
+        // Stop if we got less than limit (end of available data)
+        if (activities.length < limit) {
+          console.log(`      ✅ Reached end of available data (collection launch)`);
+          shouldStop = true;
+          break;
+        }
+        
+        // Continue to next page
+        currentOffset += limit;
       }
       
-      const activities = response.data;
-      console.log(`📦 Received ${activities.length} activities`);
-      
-      // Filter for buyNow transactions only (actual secondary market purchases)
-      const buyTransactions = activities.filter(activity => {
-        const type = activity.type?.toLowerCase();
-        const buyer = activity.buyer;
-        
-        // Only count buyNow transactions with a buyer
-        return type === 'buynow' && buyer;
-      });
-      
-      console.log(`✅ Found ${buyTransactions.length} buyNow transactions`);
+      if (sinceBlockTime) {
+        console.log(`\n✅ INCREMENTAL: Found ${allBuyTransactions.length} NEW buyNow transactions`);
+      } else {
+        console.log(`\n✅ ALL-TIME: Found ${allBuyTransactions.length} total buyNow transactions`);
+      }
+      console.log(`   Total API calls: ${pageCount}`);
+      console.log(`   Total activities scanned: ${totalFetched}\n`);
       
       // Return relevant transaction data
-      return buyTransactions.map(tx => ({
+      return allBuyTransactions.map(tx => ({
         buyer: tx.buyer,
         tokenMint: tx.tokenMint,
         price: tx.price || 0,
