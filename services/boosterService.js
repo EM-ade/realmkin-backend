@@ -49,6 +49,8 @@ class BoosterService {
           "4j7RifoUKrnHFK6TJY7nctJBcozjjFYc8BebS5MNiNZY",
           "488u23w7YAA5uowkx72kqEiwcj6sgwWGhpMDrCvBPjgX",
           "8qaYjyY7qwUMeJjz8zPzncmxUozQ2mr2har2ZkhTWbU",
+          // Random 1/1 booster added 2026-02-03
+          "7LJok6gffFQo3rU2kqW7RPPtP9gcxRHV8zPEUgNBSmo",
         ],
       },
       CUSTOM_1_1: {
@@ -63,6 +65,8 @@ class BoosterService {
           "AukNaSscLLUKZuWm5eRxxukZ76kNt5iTB7Raeeevrhw",
           "HiW5i4yiumjcZHaHpgjAgHdCRZgpX3j6s9vSeukpxuAF",
           "PUjmyCPfyEd92D2cm4pppjGB1ddX6wnnttmEzxBHErD",
+          // New Custom 1/1 booster added 2026-02-03
+          "2KUdrXcUkqyGRZNFXhuzXGVP1cHoNJkX1snLm4riCB6z",
           // New Custom 1/1 booster added 2026-01-09
           "5j9xjtXjC3ZwfLsTHnZZEZKKa7uR75m8aXyS4rBbt8CB",
           // Custom 1/1 boosters added 2026-01-10
