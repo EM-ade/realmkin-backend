@@ -452,48 +452,125 @@ router.get('/secondary-market', async (req, res) => {
       });
     }
     
-    // Build leaderboard with user details
-    const leaderboard = await Promise.all(
-      sortedDocs.map(async (cacheData, index) => {
-        const walletAddress = cacheData.walletAddress || cacheData.id;
-        
-        // Find userId by wallet address
-        let userId = null;
-        let username = `User ${walletAddress.slice(0, 6)}`;
-        let avatarUrl = undefined;
-        
-        try {
-          // Find user by wallet address
-          const userRewardsSnapshot = await db.collection('userRewards')
-            .where('walletAddress', '==', walletAddress)
-            .limit(1)
-            .get();
-          
-          if (!userRewardsSnapshot.empty) {
-            userId = userRewardsSnapshot.docs[0].id;
-            
-            // Get user profile
-            const userDoc = await db.collection('users').doc(userId).get();
-            if (userDoc.exists) {
-              const userData = userDoc.data();
-              username = userData.username || userData.email?.split('@')[0] || username;
-              avatarUrl = userData.avatarUrl;
-            }
-          }
-        } catch (error) {
-          console.error(`Error fetching user for wallet ${walletAddress}:`, error);
+    // Optimized: Batch fetch all user data upfront
+    console.log(`[Leaderboard] Batch fetching user data for ${sortedDocs.length} wallets...`);
+    
+    // Step 1: Batch get from wallets collection (primary source)
+    const walletAddresses = sortedDocs.map(doc => doc.walletAddress || doc.id);
+    const walletLookup = new Map();
+    
+    // Fetch wallets in batches (Firestore limit: 500 per batch)
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < walletAddresses.length; i += BATCH_SIZE) {
+      const batch = walletAddresses.slice(i, i + BATCH_SIZE);
+      const walletDocs = await Promise.all(
+        batch.map(addr => db.collection('wallets').doc(addr.toLowerCase()).get())
+      );
+      
+      walletDocs.forEach((doc, idx) => {
+        if (doc.exists) {
+          const data = doc.data();
+          const originalAddress = batch[idx];
+          walletLookup.set(originalAddress, {
+            userId: data.uid || data.userId,
+            username: data.username,
+            source: 'wallets'
+          });
         }
+      });
+    }
+    
+    console.log(`[Leaderboard] Found ${walletLookup.size} users in wallets collection`);
+    
+    // Step 2: For wallets not found, check userRewards (single query)
+    const notFoundWallets = walletAddresses.filter(addr => !walletLookup.has(addr));
+    if (notFoundWallets.length > 0) {
+      console.log(`[Leaderboard] Checking userRewards for ${notFoundWallets.length} remaining wallets...`);
+      
+      // Query userRewards for all missing wallets (uses IN operator, max 30 at a time)
+      const QUERY_LIMIT = 30;
+      for (let i = 0; i < notFoundWallets.length; i += QUERY_LIMIT) {
+        const batchWallets = notFoundWallets.slice(i, i + QUERY_LIMIT);
+        const userRewardsSnapshot = await db.collection('userRewards')
+          .where('walletAddress', 'in', batchWallets)
+          .get();
         
-        return {
-          rank: index + 1,
-          userId: userId || walletAddress,
-          username,
-          nftCount: cacheData.salesCount || 0, // Actual secondary market NFT count
-          walletAddress,
-          avatarUrl,
-        };
-      })
-    );
+        userRewardsSnapshot.forEach(doc => {
+          const data = doc.data();
+          walletLookup.set(data.walletAddress, {
+            userId: doc.id,
+            source: 'userRewards'
+          });
+        });
+      }
+      
+      console.log(`[Leaderboard] Found ${walletLookup.size} total users after userRewards check`);
+    }
+    
+    // Step 3: Batch get user profiles for all found userIds
+    const userIds = Array.from(new Set(
+      Array.from(walletLookup.values())
+        .map(data => data.userId)
+        .filter(id => id)
+    ));
+    
+    console.log(`[Leaderboard] Fetching ${userIds.length} user profiles...`);
+    const userProfiles = new Map();
+    
+    if (userIds.length > 0) {
+      // Batch get user documents
+      for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
+        const batchIds = userIds.slice(i, i + BATCH_SIZE);
+        const userDocs = await Promise.all(
+          batchIds.map(id => db.collection('users').doc(id).get())
+        );
+        
+        userDocs.forEach((doc, idx) => {
+          if (doc.exists) {
+            const data = doc.data();
+            userProfiles.set(batchIds[idx], {
+              username: data.username || data.email?.split('@')[0],
+              avatarUrl: data.avatarUrl
+            });
+          }
+        });
+      }
+    }
+    
+    console.log(`[Leaderboard] Fetched ${userProfiles.size} user profiles`);
+    
+    // Step 4: Build leaderboard (no async operations needed)
+    const leaderboard = sortedDocs.map((cacheData, index) => {
+      const walletAddress = cacheData.walletAddress || cacheData.id;
+      const walletData = walletLookup.get(walletAddress);
+      
+      let userId = walletData?.userId || null;
+      let username = `User ${walletAddress.slice(0, 6)}`;
+      let avatarUrl = undefined;
+      
+      // Get username from wallet lookup
+      if (walletData?.username) {
+        username = walletData.username;
+      }
+      
+      // Get full profile data if userId found
+      if (userId) {
+        const profile = userProfiles.get(userId);
+        if (profile) {
+          username = profile.username || username;
+          avatarUrl = profile.avatarUrl;
+        }
+      }
+      
+      return {
+        rank: index + 1,
+        userId: userId || walletAddress,
+        username,
+        nftCount: cacheData.salesCount || 0,
+        walletAddress,
+        avatarUrl,
+      };
+    });
     
     // Get the latest cache timestamp
     const latestCache = sortedDocs[0]; // First doc has most recent data
