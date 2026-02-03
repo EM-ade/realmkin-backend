@@ -266,7 +266,14 @@ class BoosterService {
     let totalMultiplier = 1.0;
 
     for (const booster of boosters) {
-      totalMultiplier *= booster.multiplier;
+      // Stack based on count of NFTs in this category
+      const count = booster.mints ? booster.mints.length : 1;
+
+      // Multiplicative stacking: base ^ count
+      // Example: 1.27 ^ 2 = 1.6129
+      if (count > 0 && booster.multiplier > 1.0) {
+        totalMultiplier *= Math.pow(booster.multiplier, count);
+      }
     }
 
     return totalMultiplier;
