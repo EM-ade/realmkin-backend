@@ -1,9 +1,9 @@
-import NFTVerificationService from './nftVerification.js';
-import admin from 'firebase-admin';
+import NFTVerificationService from "./nftVerification.js";
+import admin from "firebase-admin";
 
 // Helius DAS API for fetching NFT metadata
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
-const HELIUS_RPC_URL = HELIUS_API_KEY 
+const HELIUS_RPC_URL = HELIUS_API_KEY
   ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`
   : null;
 
@@ -22,7 +22,7 @@ class BoosterService {
     // Lazy initialization
     this._db = null;
     this._nftVerification = null;
-    
+
     // NFT category configurations with mint addresses
     this.NFT_CATEGORIES = {
       RANDOM_1_1: {
@@ -48,12 +48,12 @@ class BoosterService {
           "JBWVVUGkJYA3uzXhRdmTuMiP8YFP2APZP7KFtnT6jpvh",
           "4j7RifoUKrnHFK6TJY7nctJBcozjjFYc8BebS5MNiNZY",
           "488u23w7YAA5uowkx72kqEiwcj6sgwWGhpMDrCvBPjgX",
-          "8qaYjyY7qwUMeJjz8zPzncmxUozQ2mr2har2ZkhTWbU"
-        ]
+          "8qaYjyY7qwUMeJjz8zPzncmxUozQ2mr2har2ZkhTWbU",
+        ],
       },
       CUSTOM_1_1: {
         name: "Custom 1/1",
-        type: "custom_1_1", 
+        type: "custom_1_1",
         multiplier: 1.23,
         mints: [
           "AN3u7XKFSDCVAe4KopeHRZqpKByR2j9WRkTpq2SQ8ieo",
@@ -75,8 +75,8 @@ class BoosterService {
           // Custom 1/1 booster added 2026-01-19
           "31puRHydjyRuCNG4CBZSWvuh7ASR2h7UnhSrJCQqA3KQ",
           // Custom 1/1 booster added 2026-01-28
-          "GHqXzk73Y5zuvBmcG5gNWo3teivgsDqjUEifN2N7xfwj"
-        ]
+          "GHqXzk73Y5zuvBmcG5gNWo3teivgsDqjUEifN2N7xfwj",
+        ],
       },
       SOLANA_MINER: {
         name: "Solana Miner",
@@ -95,7 +95,7 @@ class BoosterService {
           "7pKZgMEVo1jnndSUCcDpY2Hpa3SapveooAmMPL2HCTWV",
           "BGtMZEb36SLHB3WceU61AwfdXbxy7k6vqXciWtvxSJsQ",
           // Solana Miner boosters added 2026-01-13
-          "HmUpTxhKjYcPCwyCF65FyCRCyKP2WzUkrCvBPjgX",
+          "HmUpTxhKjYcPCwyCF65FyCRCyKP2WzUkrCrGFVDtT8YW",
           "A4mDu4sFNmjGDadPHpbFC2GNeyH6xF9NuejiPFnX7AMZ",
           // Solana Miner boosters added 2026-01-14
           "2eXCtf44NAudG7z8S2zDAgXmLHMcr2oj1vCvc537mHq3",
@@ -106,15 +106,17 @@ class BoosterService {
           // Solana Miner booster added 2026-01-27
           "5K3LoBcsEgLpVCBDmbRsHQopPapt1KDfxHpspBdH6Fms",
           // Solana Miner booster added 2026-01-28
-          "4iZFqT9hswYLXrTEq3WwJ1wNiYtkTzCfGDWgPjWR6H9J"
-        ]
+          "4iZFqT9hswYLXrTEq3WwJ1wNiYtkTzCfGDWgPjWR6H9J",
+        ],
       },
     };
 
     // Cache for booster detection results (30 minutes - optimized for Helius credits)
     this.cache = new Map();
     this.CACHE_TTL = 30 * 60 * 1000; // 30 minutes
-    console.log(`📦 Booster cache TTL: ${this.CACHE_TTL}ms (${this.CACHE_TTL / 1000}s)`);
+    console.log(
+      `📦 Booster cache TTL: ${this.CACHE_TTL}ms (${this.CACHE_TTL / 1000}s)`,
+    );
   }
 
   get db() {
@@ -137,14 +139,14 @@ class BoosterService {
   async getUserWalletAddress(firebaseUid) {
     try {
       const userDoc = await this.db
-        .collection('userRewards')
+        .collection("userRewards")
         .doc(firebaseUid)
         .get();
-      
+
       if (!userDoc.exists) {
-        throw new Error('User not found in userRewards');
+        throw new Error("User not found in userRewards");
       }
-      
+
       return userDoc.data().walletAddress;
     } catch (error) {
       console.error(`Error getting wallet address for ${firebaseUid}:`, error);
@@ -158,50 +160,71 @@ class BoosterService {
   async scanWalletForBoosters(walletAddress) {
     try {
       console.log(`🔍 Scanning wallet ${walletAddress} for booster NFTs...`);
-      
+
       // Get all NFTs from wallet
       const allNFTs = await this.nftVerification.getNFTsByOwner(walletAddress);
-      
+
       // Debug: Log NFT structure to understand the data
       console.log(`📦 Found ${allNFTs.length} total NFTs in wallet`);
       if (allNFTs.length > 0) {
-        console.log(`📋 Sample NFT structure (first NFT):`, JSON.stringify({
-          id: allNFTs[0].id,
-          mint: allNFTs[0].mint,
-          content: allNFTs[0].content?.metadata?.name
-        }, null, 2));
+        console.log(
+          `📋 Sample NFT structure (first NFT):`,
+          JSON.stringify(
+            {
+              id: allNFTs[0].id,
+              mint: allNFTs[0].mint,
+              content: allNFTs[0].content?.metadata?.name,
+            },
+            null,
+            2,
+          ),
+        );
       }
-      
+
       // Extract mint addresses - try both 'id' and 'mint' fields
-      const walletMints = allNFTs.map(nft => {
-        const mintAddress = nft.id || nft.mint;
-        return mintAddress?.toLowerCase();
-      }).filter(Boolean);
-      
-      console.log(`🔑 Extracted ${walletMints.length} mint addresses from wallet`);
-      
+      const walletMints = allNFTs
+        .map((nft) => {
+          const mintAddress = nft.id || nft.mint;
+          return mintAddress?.toLowerCase();
+        })
+        .filter(Boolean);
+
+      console.log(
+        `🔑 Extracted ${walletMints.length} mint addresses from wallet`,
+      );
+
       // Debug: Log all booster mints we're looking for
-      const allBoosterMints = Object.values(this.NFT_CATEGORIES).flatMap(cat => cat.mints.map(m => m.toLowerCase()));
-      console.log(`🎯 Looking for ${allBoosterMints.length} booster NFT mints across all categories`);
-      
+      const allBoosterMints = Object.values(this.NFT_CATEGORIES).flatMap(
+        (cat) => cat.mints.map((m) => m.toLowerCase()),
+      );
+      console.log(
+        `🎯 Looking for ${allBoosterMints.length} booster NFT mints across all categories`,
+      );
+
       // Debug: Check for any matches
-      const anyMatches = walletMints.filter(mint => allBoosterMints.includes(mint));
+      const anyMatches = walletMints.filter((mint) =>
+        allBoosterMints.includes(mint),
+      );
       console.log(`🔍 Potential matches found: ${anyMatches.length}`);
       if (anyMatches.length > 0) {
         console.log(`   Matching mints:`, anyMatches);
       }
-      
+
       const detectedBoosters = [];
-      
+
       // Check each category
-      for (const [categoryKey, category] of Object.entries(this.NFT_CATEGORIES)) {
-        const categoryMintsLower = category.mints.map(m => m.toLowerCase());
-        const matchingMints = category.mints.filter(mint => 
-          walletMints.includes(mint.toLowerCase())
+      for (const [categoryKey, category] of Object.entries(
+        this.NFT_CATEGORIES,
+      )) {
+        const categoryMintsLower = category.mints.map((m) => m.toLowerCase());
+        const matchingMints = category.mints.filter((mint) =>
+          walletMints.includes(mint.toLowerCase()),
         );
-        
-        console.log(`   Checking ${category.name}: ${matchingMints.length}/${category.mints.length} matches`);
-        
+
+        console.log(
+          `   Checking ${category.name}: ${matchingMints.length}/${category.mints.length} matches`,
+        );
+
         if (matchingMints.length > 0) {
           detectedBoosters.push({
             type: category.type,
@@ -209,18 +232,24 @@ class BoosterService {
             multiplier: category.multiplier,
             category: categoryKey,
             mints: matchingMints,
-            detectedAt: new Date()
+            detectedAt: new Date(),
           });
-          
-          console.log(`✅ Detected ${category.name} booster (${matchingMints.length} NFTs):`, matchingMints);
+
+          console.log(
+            `✅ Detected ${category.name} booster (${matchingMints.length} NFTs):`,
+            matchingMints,
+          );
         }
       }
-      
+
       console.log(`📊 Total boosters detected: ${detectedBoosters.length}`);
-      
+
       return detectedBoosters;
     } catch (error) {
-      console.error(`Error scanning wallet ${walletAddress} for boosters:`, error);
+      console.error(
+        `Error scanning wallet ${walletAddress} for boosters:`,
+        error,
+      );
       throw error;
     }
   }
@@ -233,13 +262,13 @@ class BoosterService {
     if (!boosters || boosters.length === 0) {
       return 1.0;
     }
-    
+
     let totalMultiplier = 1.0;
-    
+
     for (const booster of boosters) {
       totalMultiplier *= booster.multiplier;
     }
-    
+
     return totalMultiplier;
   }
 
@@ -249,13 +278,15 @@ class BoosterService {
    */
   async updateUserBoosters(firebaseUid, detectedBoosters) {
     try {
-      const posRef = this.db.collection('staking_positions').doc(firebaseUid);
-      
+      const posRef = this.db.collection("staking_positions").doc(firebaseUid);
+
       await this.db.runTransaction(async (t) => {
         const posDoc = await t.get(posRef);
-        
+
         if (!posDoc.exists) {
-          console.log(`Creating staking position document for ${firebaseUid} with detected boosters`);
+          console.log(
+            `Creating staking position document for ${firebaseUid} with detected boosters`,
+          );
           // Create a minimal staking position document to store booster data
           await t.set(posRef, {
             firebase_uid: firebaseUid,
@@ -264,46 +295,47 @@ class BoosterService {
             accumulated_rewards: 0,
             last_update: admin.firestore.Timestamp.now(),
             active_boosters: detectedBoosters,
-            booster_multiplier: this.calculateStackedMultiplier(detectedBoosters),
+            booster_multiplier:
+              this.calculateStackedMultiplier(detectedBoosters),
             boosters_updated_at: admin.firestore.Timestamp.now(),
-            created_at: admin.firestore.Timestamp.now()
+            created_at: admin.firestore.Timestamp.now(),
           });
           return;
         }
-        
+
         const posData = posDoc.data();
         const oldBoosters = posData.active_boosters || [];
-        
+
         // Update with new boosters
         await t.set(posRef, {
           ...posData,
           active_boosters: detectedBoosters,
           booster_multiplier: this.calculateStackedMultiplier(detectedBoosters),
           boosters_updated_at: admin.firestore.Timestamp.now(),
-          updated_at: admin.firestore.Timestamp.now()
+          updated_at: admin.firestore.Timestamp.now(),
         });
-        
+
         // Log booster changes
         if (JSON.stringify(oldBoosters) !== JSON.stringify(detectedBoosters)) {
           console.log(`🔄 Updated boosters for ${firebaseUid}:`, {
             old: oldBoosters.length,
             new: detectedBoosters.length,
-            multiplier: this.calculateStackedMultiplier(detectedBoosters)
+            multiplier: this.calculateStackedMultiplier(detectedBoosters),
           });
-          
+
           // Add to booster history
-          const historyRef = this.db.collection('booster_history').doc();
+          const historyRef = this.db.collection("booster_history").doc();
           await t.set(historyRef, {
             user_id: firebaseUid,
             old_boosters: oldBoosters,
             new_boosters: detectedBoosters,
             old_multiplier: this.calculateStackedMultiplier(oldBoosters),
             new_multiplier: this.calculateStackedMultiplier(detectedBoosters),
-            timestamp: admin.firestore.Timestamp.now()
+            timestamp: admin.firestore.Timestamp.now(),
           });
         }
       });
-      
+
       return detectedBoosters;
     } catch (error) {
       console.error(`Error updating boosters for ${firebaseUid}:`, error);
@@ -320,18 +352,20 @@ class BoosterService {
     console.log(`\n${"=".repeat(60)}`);
     console.log(`🎯 BOOSTER DETECTION STARTED for user: ${firebaseUid}`);
     console.log(`${"=".repeat(60)}`);
-    
+
     try {
       // Check cache first
       const cacheKey = `boosters_${firebaseUid}`;
       const cached = this.cache.get(cacheKey);
-      
-      if (cached && (Date.now() - cached.timestamp) < this.CACHE_TTL) {
-        console.log(`📦 Using cached boosters for ${firebaseUid} (${cached.boosters.length} boosters)`);
+
+      if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+        console.log(
+          `📦 Using cached boosters for ${firebaseUid} (${cached.boosters.length} boosters)`,
+        );
         return cached.boosters;
       }
       console.log(`📦 No valid cache found, scanning wallet...`);
-      
+
       // Get user's wallet address
       console.log(`👤 Fetching wallet address for user ${firebaseUid}...`);
       const walletAddress = await this.getUserWalletAddress(firebaseUid);
@@ -340,28 +374,35 @@ class BoosterService {
         return [];
       }
       console.log(`✅ Wallet address: ${walletAddress}`);
-      
+
       // Scan wallet for eligible NFTs
       const detectedBoosters = await this.scanWalletForBoosters(walletAddress);
-      
+
       // Try to update user's staking position, but return boosters anyway
       try {
-        console.log(`💾 Saving ${detectedBoosters.length} boosters to database...`);
+        console.log(
+          `💾 Saving ${detectedBoosters.length} boosters to database...`,
+        );
         await this.updateUserBoosters(firebaseUid, detectedBoosters);
         console.log(`✅ Boosters saved to database`);
       } catch (updateError) {
-        console.warn(`⚠️ Failed to update database with boosters for ${firebaseUid}:`, updateError.message);
+        console.warn(
+          `⚠️ Failed to update database with boosters for ${firebaseUid}:`,
+          updateError.message,
+        );
       }
-      
+
       // Cache result
       this.cache.set(cacheKey, {
         boosters: detectedBoosters,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       });
-      
-      console.log(`🎯 BOOSTER DETECTION COMPLETE: ${detectedBoosters.length} boosters found`);
+
+      console.log(
+        `🎯 BOOSTER DETECTION COMPLETE: ${detectedBoosters.length} boosters found`,
+      );
       console.log(`${"=".repeat(60)}\n`);
-      
+
       return detectedBoosters;
     } catch (error) {
       console.error(`❌ Error detecting boosters for ${firebaseUid}:`, error);
@@ -378,7 +419,7 @@ class BoosterService {
     // Clear cache for this user
     const cacheKey = `boosters_${firebaseUid}`;
     this.cache.delete(cacheKey);
-    
+
     // Redetect boosters
     return await this.detectAndAssignBoosters(firebaseUid);
   }
@@ -391,29 +432,29 @@ class BoosterService {
       // Check cache first
       const cacheKey = `boosters_${firebaseUid}`;
       const cached = this.cache.get(cacheKey);
-      
-      if (cached && (Date.now() - cached.timestamp) < this.CACHE_TTL) {
+
+      if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
         return cached.boosters;
       }
-      
+
       // Get from database
       const posDoc = await this.db
-        .collection('staking_positions')
+        .collection("staking_positions")
         .doc(firebaseUid)
         .get();
-      
+
       if (!posDoc.exists) {
         return [];
       }
-      
+
       const boosters = posDoc.data().active_boosters || [];
-      
+
       // Cache result
       this.cache.set(cacheKey, {
         boosters: boosters,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       });
-      
+
       return boosters;
     } catch (error) {
       console.error(`Error getting boosters for ${firebaseUid}:`, error);
@@ -430,14 +471,14 @@ class BoosterService {
       name: category.name,
       type: category.type,
       multiplier: category.multiplier,
-      mintCount: category.mints.length
+      mintCount: category.mints.length,
     }));
   }
 
   /**
    * Periodic scanning of all active staking users
    * Call this from a scheduled job
-   * 
+   *
    * Rate-limited implementation:
    * - Processes users in batches to avoid API rate limits
    * - Adds delays between batches
@@ -445,69 +486,89 @@ class BoosterService {
    */
   async refreshAllActiveBoosters() {
     try {
-      console.log('🔄 Starting periodic booster refresh for all active stakers...');
-      
+      console.log(
+        "🔄 Starting periodic booster refresh for all active stakers...",
+      );
+
       // Get all users with active staking positions
       const positionsSnapshot = await this.db
-        .collection('staking_positions')
-        .where('principal_amount', '>', 0)
+        .collection("staking_positions")
+        .where("principal_amount", ">", 0)
         .get();
-      
+
       const totalUsers = positionsSnapshot.size;
       console.log(`📊 Found ${totalUsers} active stakers to refresh`);
-      
+
       if (totalUsers === 0) {
-        console.log('✅ No active stakers to refresh');
+        console.log("✅ No active stakers to refresh");
         return;
       }
-      
+
       // Configuration for rate limiting
       const BATCH_SIZE = 5; // Process 5 users at a time
       const DELAY_BETWEEN_BATCHES = 2000; // 2 second delay between batches
       const DELAY_BETWEEN_USERS = 500; // 500ms delay between users in a batch
-      
-      const userIds = positionsSnapshot.docs.map(doc => doc.id);
+
+      const userIds = positionsSnapshot.docs.map((doc) => doc.id);
       let processedCount = 0;
       let successCount = 0;
       let failureCount = 0;
-      
+
       // Process in batches
       for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
         const batch = userIds.slice(i, i + BATCH_SIZE);
         const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
         const totalBatches = Math.ceil(userIds.length / BATCH_SIZE);
-        
-        console.log(`📦 Processing batch ${batchNumber}/${totalBatches} (${batch.length} users)...`);
-        
+
+        console.log(
+          `📦 Processing batch ${batchNumber}/${totalBatches} (${batch.length} users)...`,
+        );
+
         // Process users in batch sequentially with delays
         for (const firebaseUid of batch) {
           try {
             await this.refreshUserBoosters(firebaseUid);
             successCount++;
-            console.log(`  ✅ [${processedCount + 1}/${totalUsers}] Refreshed boosters for ${firebaseUid}`);
+            console.log(
+              `  ✅ [${processedCount + 1}/${totalUsers}] Refreshed boosters for ${firebaseUid}`,
+            );
           } catch (error) {
             failureCount++;
-            console.error(`  ❌ [${processedCount + 1}/${totalUsers}] Failed to refresh boosters for ${firebaseUid}:`, error.message);
+            console.error(
+              `  ❌ [${processedCount + 1}/${totalUsers}] Failed to refresh boosters for ${firebaseUid}:`,
+              error.message,
+            );
           }
-          
+
           processedCount++;
-          
+
           // Add delay between users (except for last user in batch)
-          if (processedCount < totalUsers && batch.indexOf(firebaseUid) < batch.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_USERS));
+          if (
+            processedCount < totalUsers &&
+            batch.indexOf(firebaseUid) < batch.length - 1
+          ) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, DELAY_BETWEEN_USERS),
+            );
           }
         }
-        
+
         // Add delay between batches (except for last batch)
         if (i + BATCH_SIZE < userIds.length) {
-          console.log(`⏳ Waiting ${DELAY_BETWEEN_BATCHES}ms before next batch...`);
-          await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_BATCHES));
+          console.log(
+            `⏳ Waiting ${DELAY_BETWEEN_BATCHES}ms before next batch...`,
+          );
+          await new Promise((resolve) =>
+            setTimeout(resolve, DELAY_BETWEEN_BATCHES),
+          );
         }
       }
-      
-      console.log(`✅ Completed booster refresh: ${successCount} success, ${failureCount} failed, ${totalUsers} total`);
+
+      console.log(
+        `✅ Completed booster refresh: ${successCount} success, ${failureCount} failed, ${totalUsers} total`,
+      );
     } catch (error) {
-      console.error('Error in periodic booster refresh:', error);
+      console.error("Error in periodic booster refresh:", error);
     }
   }
 
@@ -534,26 +595,27 @@ class BoosterService {
       // Check cache first
       const cacheKey = `nft_metadata_${mintAddress}`;
       const cached = this.cache.get(cacheKey);
-      if (cached && (Date.now() - cached.timestamp) < this.CACHE_TTL * 12) { // 1 hour cache for metadata
+      if (cached && Date.now() - cached.timestamp < this.CACHE_TTL * 12) {
+        // 1 hour cache for metadata
         return cached.data;
       }
 
       if (!HELIUS_RPC_URL) {
-        console.warn('⚠️ HELIUS_API_KEY not set, cannot fetch NFT metadata');
+        console.warn("⚠️ HELIUS_API_KEY not set, cannot fetch NFT metadata");
         return null;
       }
 
       console.log(`🖼️ Fetching NFT metadata for ${mintAddress}...`);
 
       const response = await fetch(HELIUS_RPC_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 'booster-metadata',
-          method: 'getAsset',
-          params: { id: mintAddress }
-        })
+          jsonrpc: "2.0",
+          id: "booster-metadata",
+          method: "getAsset",
+          params: { id: mintAddress },
+        }),
       });
 
       if (!response.ok) {
@@ -562,7 +624,7 @@ class BoosterService {
       }
 
       const data = await response.json();
-      
+
       if (data.error) {
         console.error(`❌ Helius API error:`, data.error);
         return null;
@@ -577,25 +639,32 @@ class BoosterService {
       // Extract relevant metadata
       const metadata = {
         mint: mintAddress,
-        name: asset.content?.metadata?.name || 'Unknown NFT',
-        symbol: asset.content?.metadata?.symbol || '',
-        description: asset.content?.metadata?.description || '',
-        image: asset.content?.links?.image || asset.content?.files?.[0]?.uri || null,
+        name: asset.content?.metadata?.name || "Unknown NFT",
+        symbol: asset.content?.metadata?.symbol || "",
+        description: asset.content?.metadata?.description || "",
+        image:
+          asset.content?.links?.image || asset.content?.files?.[0]?.uri || null,
         attributes: asset.content?.metadata?.attributes || [],
-        collection: asset.grouping?.find(g => g.group_key === 'collection')?.group_value || null,
+        collection:
+          asset.grouping?.find((g) => g.group_key === "collection")
+            ?.group_value || null,
       };
 
       // Cache the result
       this.cache.set(cacheKey, {
         data: metadata,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       });
 
-      console.log(`✅ Fetched metadata for ${metadata.name}: ${metadata.image ? 'has image' : 'no image'}`);
+      console.log(
+        `✅ Fetched metadata for ${metadata.name}: ${metadata.image ? "has image" : "no image"}`,
+      );
       return metadata;
-
     } catch (error) {
-      console.error(`❌ Error fetching NFT metadata for ${mintAddress}:`, error);
+      console.error(
+        `❌ Error fetching NFT metadata for ${mintAddress}:`,
+        error,
+      );
       return null;
     }
   }
@@ -613,12 +682,12 @@ class BoosterService {
     try {
       // Fetch metadata for each mint in parallel (with concurrency limit)
       const results = await Promise.all(
-        mintAddresses.slice(0, 10).map(mint => this.getNFTMetadata(mint))
+        mintAddresses.slice(0, 10).map((mint) => this.getNFTMetadata(mint)),
       );
 
       return results.filter(Boolean); // Remove null results
     } catch (error) {
-      console.error('❌ Error fetching batch NFT metadata:', error);
+      console.error("❌ Error fetching batch NFT metadata:", error);
       return [];
     }
   }
@@ -634,68 +703,80 @@ class BoosterService {
     try {
       // First get the user's boosters from database/cache
       let boosters = await this.getUserBoosters(firebaseUid);
-      
+
       // AUTO-DETECT: If no boosters found, trigger detection automatically
       if (!boosters || boosters.length === 0) {
-        console.log(`🔍 No boosters in database for ${firebaseUid}, triggering auto-detection...`);
+        console.log(
+          `🔍 No boosters in database for ${firebaseUid}, triggering auto-detection...`,
+        );
         try {
           boosters = await this.detectAndAssignBoosters(firebaseUid);
-          console.log(`✅ Auto-detection complete: ${boosters.length} boosters found`);
+          console.log(
+            `✅ Auto-detection complete: ${boosters.length} boosters found`,
+          );
         } catch (detectionError) {
-          console.error(`⚠️ Auto-detection failed for ${firebaseUid}:`, detectionError.message);
+          console.error(
+            `⚠️ Auto-detection failed for ${firebaseUid}:`,
+            detectionError.message,
+          );
           // Return empty result if detection fails
           return {
             boosters: [],
             stackedMultiplier: 1.0,
             nftDetails: [],
             autoDetectionAttempted: true,
-            autoDetectionFailed: true
+            autoDetectionFailed: true,
           };
         }
       }
-      
+
       // If still no boosters after detection, return empty
       if (!boosters || boosters.length === 0) {
         return {
           boosters: [],
           stackedMultiplier: 1.0,
           nftDetails: [],
-          autoDetectionAttempted: true
+          autoDetectionAttempted: true,
         };
       }
 
       // Collect all mint addresses from all boosters
-      const allMints = boosters.flatMap(b => b.mints || []);
-      
+      const allMints = boosters.flatMap((b) => b.mints || []);
+
       // Fetch metadata for all NFTs
       const nftMetadata = await this.getBatchNFTMetadata(allMints);
-      
+
       // Create a map for quick lookup
-      const metadataMap = new Map(nftMetadata.map(m => [m.mint, m]));
+      const metadataMap = new Map(nftMetadata.map((m) => [m.mint, m]));
 
       // Enrich boosters with NFT details
-      const enrichedBoosters = boosters.map(booster => ({
+      const enrichedBoosters = boosters.map((booster) => ({
         ...booster,
-        nftDetails: (booster.mints || []).map(mint => metadataMap.get(mint) || {
-          mint,
-          name: 'Unknown NFT',
-          image: null
-        })
+        nftDetails: (booster.mints || []).map(
+          (mint) =>
+            metadataMap.get(mint) || {
+              mint,
+              name: "Unknown NFT",
+              image: null,
+            },
+        ),
       }));
 
       return {
         boosters: enrichedBoosters,
         stackedMultiplier: this.calculateStackedMultiplier(boosters),
-        nftDetails: nftMetadata
+        nftDetails: nftMetadata,
       };
-
     } catch (error) {
-      console.error(`❌ Error getting boosters with metadata for ${firebaseUid}:`, error);
+      console.error(
+        `❌ Error getting boosters with metadata for ${firebaseUid}:`,
+        error,
+      );
       return {
         boosters: [],
         stackedMultiplier: 1.0,
         nftDetails: [],
-        error: error.message
+        error: error.message,
       };
     }
   }
