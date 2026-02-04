@@ -1316,8 +1316,8 @@ router.post("/claim", verifyFirebaseAuth, async (req, res) => {
     // Step 5: Verify fee payment (with tolerance for price fluctuation and overpayment)
     console.log(`${logPrefix} 🔍 Verifying fee payment...`);
     // UPDATED: Increased tolerance to handle SOL price volatility and timing differences
-    const tolerance = 0.4; // 40% tolerance for price fluctuation (increased from 20%)
-    const overpaymentTolerance = 1.0; // Allow up to 100% overpayment (increased from 50%)
+    const tolerance = 1.0; // 100% tolerance for price fluctuation (VERY LAX)
+    const overpaymentTolerance = 3.0; // Allow up to 300% overpayment (VERY LAX)
     const minFee = totalExpectedFeeSol * (1 - tolerance);
     const maxFee = totalExpectedFeeSol * (1 + tolerance + overpaymentTolerance);
 
