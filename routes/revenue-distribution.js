@@ -1570,17 +1570,64 @@ router.post("/claim", verifyFirebaseAuth, async (req, res) => {
 
       // Sign and send
       transaction.sign(gatekeeperKeypair);
-      payoutSignature = await connection.sendRawTransaction(
-        transaction.serialize(),
-        {
-          skipPreflight: false,
-          preflightCommitment: "confirmed",
-        },
+      const rawTransaction = transaction.serialize();
+
+      // Initial send
+      payoutSignature = await connection.sendRawTransaction(rawTransaction, {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
+      console.log(
+        `${logPrefix}   🚀 Sent payout, initial signature: ${payoutSignature}`,
       );
 
-      // Wait for confirmation
-      await connection.confirmTransaction(payoutSignature, "confirmed");
-      console.log(`${logPrefix} ✅ Payout successful: ${payoutSignature}`);
+      // Persistent retry loop
+      console.log(
+        `${logPrefix}   ⏳ Waiting for confirmation (persistent retry mode)...`,
+      );
+
+      const startTime = Date.now();
+      const timeout = 90000; // 90s
+      let confirmed = false;
+
+      while (Date.now() - startTime < timeout) {
+        const status = await connection.getSignatureStatus(payoutSignature);
+
+        if (status && status.value) {
+          if (
+            status.value.confirmationStatus === "confirmed" ||
+            status.value.confirmationStatus === "finalized"
+          ) {
+            if (status.value.err) {
+              throw new Error(
+                `Transaction failed on-chain: ${JSON.stringify(status.value.err)}`,
+              );
+            }
+            console.log(
+              `${logPrefix}   ✅ Confirmed in ${((Date.now() - startTime) / 1000).toFixed(1)}s`,
+            );
+            confirmed = true;
+            break;
+          }
+        }
+
+        // Re-send every 2s
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        try {
+          await connection.sendRawTransaction(rawTransaction, {
+            skipPreflight: true,
+            maxRetries: 0,
+          });
+        } catch (e) {
+          // Ignore "already processed"
+        }
+      }
+
+      if (!confirmed) {
+        throw new Error(
+          "Transaction confirmation timed out (90s). It may still land.",
+        );
+      }
     } catch (payoutError) {
       console.error(`${logPrefix} ❌ Payout failed:`, payoutError);
 

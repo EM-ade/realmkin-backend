@@ -1867,12 +1867,68 @@ class StakingService {
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = vaultKeypair.publicKey;
 
-      // Sign and send
+      // Sign transaction
       transaction.sign(vaultKeypair);
-      const signature = await this.connection.sendRawTransaction(
-        transaction.serialize(),
-      );
-      await this.connection.confirmTransaction(signature, "confirmed");
+      const rawTransaction = transaction.serialize();
+
+      // Robust Send with Persistent Retry Loop
+      // Mirrors logic from mkinTransfer.js to handle network drops
+      let signature;
+      try {
+        signature = await this.connection.sendRawTransaction(rawTransaction, {
+          skipPreflight: false,
+          maxRetries: 3,
+        });
+        console.log(`   🚀 Sent tokens, initial signature: ${signature}`);
+      } catch (sendError) {
+        console.error(`   ❌ Failed initial send: ${sendError.message}`);
+        throw sendError;
+      }
+
+      console.log(`   ⏳ Waiting for confirmation (persistent retry mode)...`);
+      const startTime = Date.now();
+      const timeout = 90000; // 90 seconds timeout
+      let confirmed = false;
+
+      while (Date.now() - startTime < timeout) {
+        const status = await this.connection.getSignatureStatus(signature);
+
+        if (status && status.value) {
+          if (
+            status.value.confirmationStatus === "confirmed" ||
+            status.value.confirmationStatus === "finalized"
+          ) {
+            if (status.value.err) {
+              throw new Error(
+                "Transaction failed on-chain: " +
+                  JSON.stringify(status.value.err),
+              );
+            }
+            console.log(
+              `   ✅ Success! Confirmed in ${((Date.now() - startTime) / 1000).toFixed(1)}s`,
+            );
+            confirmed = true;
+            break;
+          }
+        }
+
+        // Re-send raw transaction every 2s to ensure propagation
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        try {
+          await this.connection.sendRawTransaction(rawTransaction, {
+            skipPreflight: true,
+            maxRetries: 0,
+          });
+        } catch (e) {
+          // Ignore "already processed" errors
+        }
+      }
+
+      if (!confirmed) {
+        throw new Error(
+          "Transaction confirmation timed out. It may still land later.",
+        );
+      }
 
       console.log(
         `✅ Sent ${amount} MKIN to ${userWallet}${needsCreateATA ? " (created ATA)" : ""}, signature: ${signature}`,
@@ -2166,12 +2222,64 @@ class StakingService {
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = vaultKeypair.publicKey;
 
-      // Sign and send
+      // Sign transaction
       transaction.sign(vaultKeypair);
-      const signature = await this.connection.sendRawTransaction(
-        transaction.serialize(),
-      );
-      await this.connection.confirmTransaction(signature, "confirmed");
+      const rawTransaction = transaction.serialize();
+
+      // Robust Send with Persistent Retry Loop
+      let signature;
+      try {
+        signature = await this.connection.sendRawTransaction(rawTransaction, {
+          skipPreflight: false,
+          maxRetries: 3,
+        });
+        console.log(`   🚀 Sent SOL, initial signature: ${signature}`);
+      } catch (sendError) {
+        console.error(`   ❌ Failed initial send: ${sendError.message}`);
+        throw sendError;
+      }
+
+      console.log(`   ⏳ Waiting for confirmation (persistent retry mode)...`);
+      const startTime = Date.now();
+      const timeout = 90000; // 90s
+      let confirmed = false;
+
+      while (Date.now() - startTime < timeout) {
+        const status = await this.connection.getSignatureStatus(signature);
+
+        if (status && status.value) {
+          if (
+            status.value.confirmationStatus === "confirmed" ||
+            status.value.confirmationStatus === "finalized"
+          ) {
+            if (status.value.err) {
+              throw new Error(
+                "Transaction failed on-chain: " +
+                  JSON.stringify(status.value.err),
+              );
+            }
+            console.log(
+              `   ✅ Success! Confirmed in ${((Date.now() - startTime) / 1000).toFixed(1)}s`,
+            );
+            confirmed = true;
+            break;
+          }
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        try {
+          await this.connection.sendRawTransaction(rawTransaction, {
+            skipPreflight: true,
+            maxRetries: 0,
+          });
+        } catch (e) {}
+      }
+
+      if (!confirmed) {
+        throw new Error(
+          "Transaction confirmation timed out. It may still land later.",
+        );
+      }
 
       console.log(
         `✅ Sent ${amountSol} SOL to ${userWalletAddr}, signature: ${signature}`,

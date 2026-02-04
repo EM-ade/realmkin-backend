@@ -221,61 +221,66 @@ async function sendMkinTokens(recipientWalletAddress, amount) {
     throw sendError;
   }
 
-  // Confirm transaction with robust error handling
+  // Confirm transaction with robust error handling (Persistent re-sending)
   try {
-    const confirmation = await connection.confirmTransaction(
-      {
-        signature: txHash,
-        blockhash: blockhash,
-        lastValidBlockHeight: lastValidBlockHeight,
-      },
-      "confirmed",
-    );
+    console.log(`[MKIN Transfer] Waiting for confirmation (TX: ${txHash})...`);
 
-    if (confirmation.value.err) {
+    const startTime = Date.now();
+    const timeout = 90000; // 90 seconds timeout for this attempt
+    let confirmed = false;
+
+    // Retry loop: keep sending and checking status
+    while (Date.now() - startTime < timeout) {
+      const status = await connection.getSignatureStatus(txHash);
+
+      if (status && status.value) {
+        if (
+          status.value.confirmationStatus === "confirmed" ||
+          status.value.confirmationStatus === "finalized"
+        ) {
+          if (status.value.err) {
+            throw new Error(
+              "Transaction failed on-chain: " +
+                JSON.stringify(status.value.err),
+            );
+          }
+          console.log(
+            `[MKIN Transfer] Success! Confirmed in ${((Date.now() - startTime) / 1000).toFixed(1)}s. TX: ${txHash}`,
+          );
+          confirmed = true;
+          break;
+        }
+      }
+
+      // If not confirmed yet, wait a bit and re-send the same raw transaction
+      // This is safe to do; it won't execute twice but helps with propagation
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      try {
+        await connection.sendRawTransaction(rawTransaction, {
+          skipPreflight: true, // Skip preflight on retries for speed
+          maxRetries: 0,
+        });
+      } catch (e) {
+        // Ignore "already processed" errors
+        if (!e.message.includes("already been processed")) {
+          console.warn(`[MKIN Transfer] Re-send attempt failed: ${e.message}`);
+        }
+      }
+    }
+
+    if (!confirmed) {
       throw new Error(
-        "Transaction failed: " + JSON.stringify(confirmation.value.err),
+        "Transaction confirmation timed out. It may still land later.",
       );
     }
 
-    console.log("[MKIN Transfer] Success! TX: " + txHash);
     return txHash;
   } catch (error) {
-    console.warn(
-      "[MKIN Transfer] Confirmation timed out or failed, checking status manually...",
+    console.error(
+      `[MKIN Transfer] Error during confirmation loop:`,
+      error.message,
     );
-
-    // Check if it actually landed despite the error
-    try {
-      const status = await connection.getSignatureStatus(txHash);
-      if (
-        status &&
-        status.value &&
-        status.value.confirmationStatus &&
-        (status.value.confirmationStatus === "confirmed" ||
-          status.value.confirmationStatus === "finalized")
-      ) {
-        if (status.value.err) {
-          throw new Error(
-            "Transaction failed on-chain: " + JSON.stringify(status.value.err),
-          );
-        }
-
-        console.log(
-          "[MKIN Transfer] Transaction actually succeeded despite confirmation error! TX: " +
-            txHash,
-        );
-        return txHash;
-      }
-    } catch (statusError) {
-      console.warn(
-        "[MKIN Transfer] Could not verify status manually: " +
-          statusError.message,
-      );
-    }
-
-    // If we're here, it likely really failed or we can't verify it.
-    // Re-throw the original error to trigger the refund logic in the caller.
     throw error;
   }
 }
