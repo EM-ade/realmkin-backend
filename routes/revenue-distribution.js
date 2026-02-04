@@ -826,13 +826,19 @@ router.post("/refresh-secondary-market", async (req, res) => {
 
       for (const [walletAddress, data] of batchBuyers) {
         const cacheRef = db.collection("secondarySaleCache").doc(walletAddress);
+        // Determine if we should increment or set
+        let salesCountValue = data.count;
+        if (usedCollectionApi && !isFirstFetch) {
+          salesCountValue = admin.firestore.FieldValue.increment(data.count);
+        }
+
         batch.set(
           cacheRef,
           {
             walletAddress,
-            salesCount: data.count,
+            salesCount: salesCountValue,
             lastCheckedAt: admin.firestore.Timestamp.now(),
-            hasSecondarySale: data.count > 0,
+            hasSecondarySale: true, // If in buyerMap, it has sales
             lastPurchaseTime: admin.firestore.Timestamp.fromMillis(
               data.lastPurchase,
             ),
