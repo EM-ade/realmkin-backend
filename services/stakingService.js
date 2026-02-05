@@ -2048,8 +2048,11 @@ class StakingService {
 
           if (info.destination === stakingAddr) {
             // Use maxAmountSol if no minAmountSol provided (backward compatibility)
-            const min = minAmountSol || maxAmountSol;
-            const max = maxAmountSol || minAmountSol;
+            // CRITICAL FIX: Use explicit undefined check to handle 0 as a valid value
+            const min =
+              minAmountSol !== undefined ? minAmountSol : maxAmountSol;
+            const max =
+              maxAmountSol !== undefined ? maxAmountSol : minAmountSol;
 
             if (solAmount >= min && solAmount <= max) {
               console.log(`✅ Fee payment verified!`);
