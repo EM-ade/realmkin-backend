@@ -105,9 +105,9 @@ class StakingService {
   }
 
   /**
-   * Helper: Update Pool State with 30% Flat ROI Logic
-   * Calculates rewards based on: (totalStaked * 30% * tokenPrice * timeDiff) / SECONDS_IN_YEAR
-   * This ensures users earn 30% of their staked token value per year, paid in SOL.
+   * Helper: Update Pool State with 10% Flat ROI Logic
+   * Calculates rewards based on: (totalStaked * 10% * tokenPrice * timeDiff) / SECONDS_IN_YEAR
+   * This ensures users earn 10% of their staked token value per year, paid in SOL.
    *
    * @deprecated Use _calculateNewPoolStateSync() inside Firestore transactions
    */
@@ -124,10 +124,10 @@ class StakingService {
       return { ...poolData, last_reward_time: now, updated_at: now };
     }
 
-    // NEW: 30% Flat ROI Logic
-    // Reward = (Staked Tokens * 30% * Token/SOL Price * Time) / Year
+    // NEW: 10% Flat ROI Logic
+    // Reward = (Staked Tokens * 10% * Token/SOL Price * Time) / Year
     const SECONDS_IN_YEAR = 365 * 24 * 60 * 60;
-    const ROI_PERCENT = 0.3; // 30% per year
+    const ROI_PERCENT = 0.1; // 10% per year
 
     // Fetch current MKIN/SOL price
     const { getMkinPriceSOL } = await import("../utils/mkinPrice.js");
@@ -179,10 +179,10 @@ class StakingService {
       return { ...poolData, last_reward_time: now, updated_at: now };
     }
 
-    // 30% Flat ROI Logic
-    // Reward = (Staked Tokens * 30% * Token/SOL Price * Time) / Year
+    // 10% Flat ROI Logic
+    // Reward = (Staked Tokens * 10% * Token/SOL Price * Time) / Year
     const SECONDS_IN_YEAR = 365 * 24 * 60 * 60;
-    const ROI_PERCENT = 0.3; // 30% per year
+    const ROI_PERCENT = 0.1; // 10% per year
 
     console.log(
       `💰 Pool update (sync): ${poolData.total_staked.toLocaleString()} MKIN staked, price: ${tokenPriceSol.toFixed(
@@ -210,9 +210,12 @@ class StakingService {
 
   /**
    * GET /overview
-   * Simplified: Fixed 30% ROI with reward gating based on goal completion
+   * Simplified: Fixed 10% ROI with reward gating based on goal completion
    */
   async getOverview(firebaseUid) {
+    // Import fee wallets for config
+    const { FEE_WALLETS, FEE_SPLIT } = await import("../utils/treasuryWallet.js");
+    
     // Check if goal is completed (for reward gating)
     const { goalService } = await import("./goalService.js");
     const isGoalCompleted = await goalService.isGoalCompleted();
@@ -251,7 +254,7 @@ class StakingService {
       if (posDoc.exists) {
         userPos = posDoc.data();
 
-        // Calculate pending with 30% FLAT ROI (token-value-based)
+        // Calculate pending with 10% FLAT ROI (token-value-based)
         // Checkpoint-based calculation (Fixes "Instant Rewards" bug)
         // REWARD GATING: Only calculate rewards if goal is completed
         if (
@@ -284,11 +287,11 @@ class StakingService {
       }
     }
 
-    // Calculate user's mining rate (30% ROI based on token value)
+    // Calculate user's mining rate (10% ROI based on token value)
     // REWARD GATING: Only show mining rate if goal is completed
     const SECONDS_IN_YEAR = 365 * 24 * 60 * 60;
-    const ROI_PERCENT = 0.3; // 30% per year
-    const FIXED_APR = 30; // Display as 30% APR
+    const ROI_PERCENT = 0.1; // 10% per year
+    const FIXED_APR = 10; // Display as 10% APR
 
     let baseMiningRate = 0;
     let totalMiningRate = 0;
@@ -299,7 +302,7 @@ class StakingService {
       const { getMkinPriceSOL } = await import("../utils/mkinPrice.js");
       const tokenPriceSol = await getMkinPriceSOL();
 
-      // Base rate = (principal * 30% * price) / seconds_in_year
+      // Base rate = (principal * 10% * price) / seconds_in_year
       baseMiningRate =
         (userPos.principal_amount * ROI_PERCENT * tokenPriceSol) /
         SECONDS_IN_YEAR;
@@ -318,7 +321,7 @@ class StakingService {
         SECONDS_IN_YEAR;
       displayMiningRate = lockedBaseMiningRate * boosterMultiplier;
 
-      console.log(`⛏️ User mining rate (30% ROI):`);
+      console.log(`⛏️ User mining rate (10% ROI):`);
       console.log(
         `   Principal: ${userPos.principal_amount.toLocaleString()} MKIN`,
       );
@@ -342,7 +345,7 @@ class StakingService {
       pool: {
         totalStaked: pool.total_staked,
         rewardPool: pool.reward_pool_sol,
-        apr: FIXED_APR, // Fixed 30% APR
+        apr: FIXED_APR, // Fixed 10% APR
       },
       user: {
         principal: userPos?.principal_amount || 0,
@@ -361,6 +364,9 @@ class StakingService {
       },
       config: {
         stakingWalletAddress: process.env.STAKING_WALLET_ADDRESS,
+        treasuryWallet: FEE_WALLETS.TREASURY,
+        personalWallet: FEE_WALLETS.PERSONAL,
+        feeSplit: FEE_SPLIT,
         roiPercent: ROI_PERCENT,
         fixedApr: FIXED_APR,
         isRewardsPaused: !isGoalCompleted, // Rewards are paused until goal is completed
@@ -371,7 +377,7 @@ class StakingService {
 
   /**
    * STAKE
-   * User sends MKIN tokens to vault + pays 5% entry fee in SOL
+   * User sends MKIN tokens to vault + pays 5% entry fee + $0.90 site fee in SOL
    * Fee goes to reward pool to grow APR for everyone
    */
   async stake(firebaseUid, amount, txSignature, feeSignature) {
@@ -431,13 +437,25 @@ class StakingService {
     }
     console.log(`${logPrefix} ✅ User wallet found: ${userWallet}`);
 
-    // 1. Calculate 5% entry fee in SOL
-    console.log(`${logPrefix} 💰 Step 1: Calculating 5% entry fee...`);
+    // 1. Calculate 5% entry fee + $0.80 site fee in SOL
+    console.log(`${logPrefix} 💰 Step 1: Calculating 5% entry fee + $0.80 site fee...`);
     const { calculateStakingFee } = await import("../utils/mkinPrice.js");
     const feeData = await calculateStakingFee(amount, 5);
+    
+    // Add $0.90 site fee (Maintenance $0.25 + Team $0.10 + Treasury $0.55)
+    const { getFeeInSol } = await import("../utils/solPrice.js");
+    const siteFeeData = await getFeeInSol(0.90); // $0.90 USD
+    const totalFeeInSol = feeData.feeInSol + siteFeeData.solAmount;
+    
     console.log(`${logPrefix} Fee Calculation Results:`);
     console.log(
-      `${logPrefix}   - Fee in SOL: ${feeData.feeInSol.toFixed(9)} SOL`,
+      `${logPrefix}   - 5% fee in SOL: ${feeData.feeInSol.toFixed(9)} SOL`,
+    );
+    console.log(
+      `${logPrefix}   - Site fee ($0.80): ${siteFeeData.solAmount.toFixed(9)} SOL`,
+    );
+    console.log(
+      `${logPrefix}   - Total fee in SOL: ${totalFeeInSol.toFixed(9)} SOL`,
     );
     console.log(
       `${logPrefix}   - Fee in MKIN value: ${feeData.feeInMkin} MKIN`,
@@ -446,16 +464,16 @@ class StakingService {
     console.log(`${logPrefix}   - MKIN price (USD): $${feeData.mkinPriceUsd}`);
     console.log(`${logPrefix}   - SOL price (USD): $${feeData.solPriceUsd}`);
 
-    // 2. Verify fee payment (5% in SOL)
+    // 2. Verify fee payment (5% + $0.80 in SOL)
     // Allow 100% tolerance for rounding/timing differences between frontend and backend
     console.log(`${logPrefix} 🔍 Step 2: Verifying fee payment...`);
     const tolerance = 1.0; // 100% (VERY LAX)
-    const minFee = feeData.feeInSol * (1 - tolerance);
-    const maxFee = feeData.feeInSol * (1 + tolerance);
+    const minFee = totalFeeInSol * (1 - tolerance);
+    const maxFee = totalFeeInSol * (1 + tolerance);
 
     console.log(`${logPrefix} Fee Verification Parameters:`);
     console.log(
-      `${logPrefix}   - Expected: ${feeData.feeInSol.toFixed(9)} SOL`,
+      `${logPrefix}   - Expected: ${totalFeeInSol.toFixed(9)} SOL`,
     );
     console.log(`${logPrefix}   - Tolerance: ${tolerance * 100}%`);
     console.log(`${logPrefix}   - Min acceptable: ${minFee.toFixed(9)} SOL`);
@@ -604,7 +622,7 @@ class StakingService {
         );
 
         // NOTE: We no longer use MasterChef-style acc_reward_per_share/reward_debt
-        // Rewards are calculated purely based on: (principal * 30% * price * time) / year
+        // Rewards are calculated purely based on: (principal * 10% * price * time) / year
 
         // 🚀 ADD ENTRY FEE TO REWARD POOL (Self-Sustaining Pool Growth!)
         const previousRewardPool = poolData.reward_pool_sol || 0;
@@ -777,7 +795,7 @@ class StakingService {
 
   /**
    * CLAIM
-   * Claims pending rewards. Requires $2 USD fee (~0.02 SOL, dynamic).
+   * Claims pending rewards. Requires $2.90 USD fee ($2.00 + $0.90 site fee, dynamic).
    */
   async claim(firebaseUid, txSignature) {
     const operationId = `CLAIM-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -848,39 +866,26 @@ class StakingService {
       console.log(`${logPrefix} ✅ No duplicate claim found`);
 
       // 3. Calculate dynamic fee based on current SOL price
+      // $2.90 total ($2.00 base + $0.90 site fee)
       console.log(`${logPrefix} 🔍 Step 3: Calculating claim fee...`);
       const { getFeeInSol } = await import("../utils/solPrice.js");
       const {
         solAmount: feeAmount,
         usdAmount,
         solPrice,
-      } = await getFeeInSol(2.0); // $2 USD
-
+      } = await getFeeInSol(2.90); // $2.90 USD ($2.00 + $0.90 site fee)
+      
       console.log(
         `${logPrefix} 💵 Claim fee: $${usdAmount} = ${feeAmount.toFixed(
           4,
         )} SOL (SOL price: $${solPrice})`,
       );
 
-      // 4. Verify SOL Fee payment (USD-based validation for future-proofing)
-      console.log(`${logPrefix} 🔍 Step 4: Verifying fee transaction...`);
-      console.log(`   Transaction: ${txSignature}`);
-
-      // Accept any transaction within ±100% of the expected SOL amount
-      // This handles large SOL price swings while still validating destination
-      const tolerancePercent = 1.0; // 100% tolerance (VERY LAX)
-      const minFee = feeAmount * (1 - tolerancePercent);
-      const maxFee = feeAmount * (1 + tolerancePercent);
-
-      console.log(
-        `   Expected fee: ~${feeAmount.toFixed(4)} SOL ($${usdAmount})`,
-      );
-      console.log(
-        `   Acceptable range: ${minFee.toFixed(4)} - ${maxFee.toFixed(4)} SOL (±20%)`,
-      );
-      console.log(
-        `   Note: We verify destination address and reasonable amount, not exact SOL`,
-      );
+      // 4. Verify fee payment
+      console.log(`${logPrefix} 🔍 Step 4: Verifying fee payment...`);
+      const tolerance = 0.5; // 50% tolerance
+      const minFee = feeAmount * (1 - tolerance);
+      const maxFee = feeAmount * (1 + tolerance);
 
       const isValidFee = await this._verifySolTransfer(
         txSignature,
@@ -889,17 +894,31 @@ class StakingService {
       );
 
       if (!isValidFee) {
-        console.error(
-          `❌ Fee verification failed for transaction: ${txSignature}`,
-        );
-        console.error(`   Check the detailed logs above for the exact reason`);
         throw new StakingError(
-          "Unable to verify your fee payment. Please wait a moment and try again. If the issue persists, contact support.",
+          `Invalid fee payment. Expected ~${feeAmount.toFixed(
+            4,
+          )} SOL ($${usdAmount})`,
         );
       }
-      console.log(`${logPrefix} ✅ Fee transaction verified`);
 
-      // 5. Check treasury SOL balance BEFORE processing claim (using real-time calculated rewards)
+      console.log(`${logPrefix} ✅ Fee payment verified`);
+      
+      // 5. Distribute site fee ($0.90) to treasury and personal wallets
+      console.log(`${logPrefix} 💸 Step 5: Distributing site fee ($0.90)...`);
+      const { distributeFees } = await import("../utils/feeDistribution.js");
+      const distributionResult = await distributeFees('claim', 0.90, {
+        treasuryDestination: "gatekeeper",
+      }); // Distribute $0.90 site fee
+      
+      if (distributionResult.success) {
+        console.log(`${logPrefix} ✅ Fee distributed successfully`);
+        console.log(`${logPrefix}    Treasury: ${distributionResult.treasuryAmount.toFixed(6)} SOL`);
+        console.log(`${logPrefix}    Personal: ${distributionResult.personalAmount.toFixed(6)} SOL`);
+      } else {
+        console.warn(`${logPrefix} ⚠️ Fee distribution failed: ${distributionResult.error}`);
+      }
+
+      // 6. Check treasury SOL balance BEFORE processing claim (using real-time calculated rewards)
       console.log(`${logPrefix} 🔍 Step 5: Checking treasury SOL balance...`);
       const treasuryKeypair = Keypair.fromSecretKey(
         bs58.decode(process.env.STAKING_PRIVATE_KEY),
@@ -1160,7 +1179,7 @@ class StakingService {
   /**
    * UNSTAKE
    * Debits Position Principal, Sends tokens from vault back to user.
-   * Requires $2 USD fee (~0.02 SOL, dynamic).
+   * Requires $2.90 USD fee ($2.00 + $0.90 site fee, dynamic).
    */
   async unstake(firebaseUid, amount, txSignature) {
     const operationId = `UNSTAKE-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -1227,12 +1246,13 @@ class StakingService {
     }
 
     // 1. Calculate dynamic fee based on current SOL price
+    // $2.90 total ($2.00 base + $0.90 site fee)
     const { getFeeInSol } = await import("../utils/solPrice.js");
     const {
       solAmount: feeAmount,
       usdAmount,
       solPrice,
-    } = await getFeeInSol(2.0); // $2 USD
+    } = await getFeeInSol(2.90); // $2.90 USD ($2.00 + $0.90 site fee)
 
     console.log(
       `💵 Unstake fee: $${usdAmount} = ${feeAmount.toFixed(
@@ -1278,9 +1298,24 @@ class StakingService {
       );
     }
     console.log(`✅ Fee transaction verified`);
+    
+    // 3. Distribute site fee ($0.90) to treasury and personal wallets
+    console.log(`💸 Step 3: Distributing site fee ($0.90)...`);
+    const { distributeFees } = await import("../utils/feeDistribution.js");
+    const distributionResult = await distributeFees('unstake', 0.90, {
+      treasuryDestination: "gatekeeper",
+    });
+    
+    if (distributionResult.success) {
+      console.log(`✅ Fee distributed successfully`);
+      console.log(`   Treasury: ${distributionResult.treasuryAmount.toFixed(6)} SOL`);
+      console.log(`   Personal: ${distributionResult.personalAmount.toFixed(6)} SOL`);
+    } else {
+      console.warn(`⚠️ Fee distribution failed: ${distributionResult.error}`);
+    }
 
-    // 3. Check vault MKIN balance BEFORE accepting fee
-    console.log(`🔍 Step 3: Checking vault MKIN balance...`);
+    // 4. Check vault MKIN balance BEFORE accepting fee
+    console.log(`🔍 Step 4: Checking vault MKIN balance...`);
     const vaultAddress = new PublicKey(process.env.STAKING_WALLET_ADDRESS);
     const vaultATA = await getAssociatedTokenAddress(
       this.tokenMint,
@@ -2129,12 +2164,12 @@ class StakingService {
       return 0;
     }
 
-    // Annual return rate (30% APY)
-    const ANNUAL_RATE = 0.3;
+    // Annual return rate (10% APY)
+    const ANNUAL_RATE = 0.1;
     const SECONDS_PER_YEAR = 365 * 24 * 60 * 60; // 31,536,000 (match frontend exactly)
 
     // Calculate base rewards (matches frontend formula exactly):
-    // baseRewards = (stakedAmount * 0.3 * tokenPriceSol * durationSeconds) / SECONDS_IN_YEAR
+    // baseRewards = (stakedAmount * 0.1 * tokenPriceSol * durationSeconds) / SECONDS_IN_YEAR
     const baseRewards =
       (principalAmountMKIN * ANNUAL_RATE * tokenPriceSol * secondsStaked) /
       SECONDS_PER_YEAR;

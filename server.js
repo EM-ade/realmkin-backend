@@ -271,11 +271,19 @@ app.post("/api/withdraw/initiate", verifyFirebase, async (req, res) => {
 
     // Get SOL price and calculate fee
     const solPrice = await getSolPriceUSD();
-    const feeInUsd = 0.15;
+    const feeInUsd = 1.05; // $0.15 base + $0.90 site fee (Maintenance $0.25 + Team $0.10 + Treasury $0.55)
     const feeInSol = feeInUsd / solPrice;
 
-    // Create fee transaction
-    const treasuryPubkey = new PublicKey(process.env.TREASURY_WALLET || "785QofuiXAy29RnDcH13CcnJu7fqLNp4r9SxeA9Yg9Gt");
+    // Create fee transaction (route fees to gatekeeper wallet)
+    const gatekeeperKeypairJson = process.env.GATEKEEPER_KEYPAIR;
+    if (!gatekeeperKeypairJson) {
+      return res.status(500).json({ error: "GATEKEEPER_KEYPAIR not configured" });
+    }
+
+    const gatekeeperKeypair = Keypair.fromSecretKey(
+      Buffer.from(JSON.parse(gatekeeperKeypairJson))
+    );
+    const gatekeeperPubkey = gatekeeperKeypair.publicKey;
     const userPubkey = new PublicKey(walletAddress);
     const solanaRpcUrl = process.env.HELIUS_MAINNET_RPC_URL || "https://api.mainnet-beta.solana.com";
     const connection = new Connection(solanaRpcUrl);
@@ -283,7 +291,7 @@ app.post("/api/withdraw/initiate", verifyFirebase, async (req, res) => {
     const transaction = new Transaction().add(
       SystemProgram.transfer({
         fromPubkey: userPubkey,
-        toPubkey: treasuryPubkey,
+        toPubkey: gatekeeperPubkey,
         lamports: Math.floor(feeInSol * 1e9),
       })
     );
@@ -350,6 +358,37 @@ app.post("/api/withdraw/complete", verifyFirebase, async (req, res) => {
       return res.status(400).json({ error: "Fee transaction invalid or failed" });
     }
 
+    // Ensure fee was paid by user to gatekeeper wallet and amount is correct
+    const userPubkey = new PublicKey(walletAddress);
+    const feeInUsd = 1.05; // $0.15 base + $0.90 site fee
+    const solPrice = await getSolPriceUSD();
+    const feeInSol = feeInUsd / solPrice;
+    const feeInLamports = Math.floor(feeInSol * 1e9);
+
+    const gatekeeperKeypairJson = process.env.GATEKEEPER_KEYPAIR;
+    if (!gatekeeperKeypairJson) {
+      return res.status(500).json({ error: "GATEKEEPER_KEYPAIR not configured" });
+    }
+
+    const gatekeeperKeypair = Keypair.fromSecretKey(
+      Buffer.from(JSON.parse(gatekeeperKeypairJson))
+    );
+    const gatekeeperPubkey = gatekeeperKeypair.publicKey.toBase58();
+
+    const instructions = txInfo.transaction.message.instructions;
+    const feePayment = instructions.find(ix => {
+      if (!ix.parsed || ix.parsed.type !== "transfer") return false;
+      return (
+        ix.parsed.info.source === userPubkey.toString() &&
+        ix.parsed.info.destination === gatekeeperPubkey &&
+        ix.parsed.info.lamports >= feeInLamports
+      );
+    });
+
+    if (!feePayment) {
+      return res.status(400).json({ error: "Fee payment not found or incorrect" });
+    }
+
     // Mark fee as used
     await usedFeesRef.set({
       userId,
@@ -357,6 +396,18 @@ app.post("/api/withdraw/complete", verifyFirebase, async (req, res) => {
       walletAddress,
       usedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+
+    // Distribute site fee split from gatekeeper wallet
+    const distributionResult = await distributeFees("withdraw", 0.9, {
+      sourceWallet: "gatekeeper",
+      treasuryDestination: "gatekeeper",
+      extraTreasuryUsd: 0.15,
+    });
+    if (!distributionResult.success) {
+      console.warn(
+        `[Withdraw Complete] Fee distribution failed: ${distributionResult.error}`
+      );
+    }
 
     // Deduct from Firebase
     const rewardsRef = fs.collection("userRewards").doc(userId);

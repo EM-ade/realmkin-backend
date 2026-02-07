@@ -14,6 +14,7 @@ import {
 import bs58 from "bs58";
 import secondarySaleVerificationService from "../services/secondarySaleVerification.js";
 import NFTVerificationService from "../services/nftVerification.js";
+import { distributeFees } from "../utils/feeDistribution.js";
 
 const router = express.Router();
 
@@ -36,9 +37,12 @@ const CONFIG = {
     "BKDGf6DnDHK87GsZpdWXyBqiNdcNb6KnoFcYbWPUhJLA",
 
   MIN_NFTS: parseInt(process.env.REVENUE_DISTRIBUTION_MIN_NFTS || "1"),
-  CLAIM_FEE_USD: parseFloat(
-    process.env.REVENUE_DISTRIBUTION_CLAIM_FEE_USD || "0.10",
-  ),
+  CLAIM_FEE_USD: Math.max(
+    parseFloat(
+      process.env.REVENUE_DISTRIBUTION_CLAIM_FEE_USD || "1.00", // $0.10 base + $0.90 site fee
+    ),
+    1.0,
+  ), // Enforce minimum $1.00 claim fee even if env is outdated
   TOKEN_ACCOUNT_CREATION_FEE_USD: 1.0, // $1.00 per token account creation
   EXPIRY_DAYS: parseInt(process.env.REVENUE_DISTRIBUTION_EXPIRY_DAYS || "30"),
   SECRET_TOKEN:
@@ -1410,6 +1414,22 @@ router.post("/claim", verifyFirebaseAuth, async (req, res) => {
     console.log(
       `${logPrefix} ✅ Fee verified: ${totalExpectedFeeSol.toFixed(6)} SOL`,
     );
+
+    // Step 3.5: Distribute site fee split ($0.90 total) + base fee to treasury
+    const feeDistributionResult = await distributeFees(
+      "revenue",
+      0.9,
+      {
+        sourceWallet: "gatekeeper",
+        treasuryDestination: "gatekeeper",
+        extraTreasuryUsd: 0.1,
+      },
+    );
+    if (!feeDistributionResult.success) {
+      console.warn(
+        `${logPrefix} ⚠️ Fee distribution failed: ${feeDistributionResult.error}`,
+      );
+    }
 
     // Step 4: Get payout amounts (multi-token)
     const payoutSol = allocation.amountSol || 0;
