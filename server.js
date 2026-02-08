@@ -26,11 +26,12 @@ import admin from "firebase-admin";
 import sql from "./db.js";
 import cors from "cors";
 import cron from "node-cron";
-import { PublicKey, Connection, Transaction, SystemProgram } from "@solana/web3.js";
+import { PublicKey, Connection, Transaction, SystemProgram, Keypair } from "@solana/web3.js";
 import withdrawalLogger from "./services/withdrawalLogger.js";
 import { sendMkinTokens } from "./utils/mkinTransfer.js";
 import { getSolPriceUSD } from "./utils/solPrice.js";
 import queryMonitor from "./utils/queryMonitor.js";
+import { distributeFees } from "./utils/feeDistribution.js";
 
 // Initialize Firebase Admin
 console.log("[API] Initializing Firebase Admin...");
@@ -375,8 +376,8 @@ app.post("/api/withdraw/complete", verifyFirebase, async (req, res) => {
     );
     const gatekeeperPubkey = gatekeeperKeypair.publicKey.toBase58();
 
-    const instructions = txInfo.transaction.message.instructions;
-    const feePayment = instructions.find(ix => {
+    const instructions = txInfo.transaction.message.instructions || [];
+    const feePayment = instructions.find((ix) => {
       if (!ix.parsed || ix.parsed.type !== "transfer") return false;
       return (
         ix.parsed.info.source === userPubkey.toString() &&
@@ -385,7 +386,24 @@ app.post("/api/withdraw/complete", verifyFirebase, async (req, res) => {
       );
     });
 
-    if (!feePayment) {
+    let feeVerified = Boolean(feePayment);
+
+    if (!feeVerified) {
+      // Fallback: check balance deltas for versioned transactions
+      const accountKeys = txInfo.transaction.message.accountKeys || [];
+      const accountIndex = accountKeys.findIndex(
+        (key) => key.toString() === gatekeeperPubkey
+      );
+
+      if (accountIndex >= 0 && txInfo.meta?.postBalances && txInfo.meta?.preBalances) {
+        const balanceDelta =
+          txInfo.meta.postBalances[accountIndex] -
+          txInfo.meta.preBalances[accountIndex];
+        feeVerified = balanceDelta >= feeInLamports;
+      }
+    }
+
+    if (!feeVerified) {
       return res.status(400).json({ error: "Fee payment not found or incorrect" });
     }
 

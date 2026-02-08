@@ -2103,6 +2103,35 @@ class StakingService {
         }
       }
 
+      // Fallback for versioned transactions: check balance delta
+      const accountKeys = tx.transaction.message.accountKeys || [];
+      const accountIndex = accountKeys.findIndex(
+        (key) => key.toString() === stakingAddr,
+      );
+
+      if (
+        accountIndex >= 0 &&
+        tx.meta?.postBalances &&
+        tx.meta?.preBalances
+      ) {
+        const balanceDelta =
+          tx.meta.postBalances[accountIndex] -
+          tx.meta.preBalances[accountIndex];
+        const minLamports = Math.floor(
+          (minAmountSol !== undefined ? minAmountSol : 0) * 1e9,
+        );
+        const maxLamports = Math.floor(
+          (maxAmountSol !== undefined
+            ? maxAmountSol
+            : Number.MAX_SAFE_INTEGER) * 1e9,
+        );
+
+        if (balanceDelta >= minLamports && balanceDelta <= maxLamports) {
+          console.log(`✅ Fee payment verified via balance delta!`);
+          return true;
+        }
+      }
+
       console.error("❌ No valid fee transfer found in transaction");
       return false;
     } catch (e) {
