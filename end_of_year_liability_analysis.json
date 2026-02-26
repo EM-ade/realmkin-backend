@@ -1,0 +1,21 @@
+{
+  "analysisDate": "2026-02-09T12:14:32.082Z",
+  "rateChangeDate": "2026-02-07T00:00:00.000Z",
+  "endDateOfYear": "2026-12-31T23:59:59.000Z",
+  "poolBalanceSol": 1.9954353658361745,
+  "totalUsersAnalyzed": 44,
+  "totalRewardsEarned30": 2.591717438034282,
+  "totalFutureRewardsEarned10": 7.603442086218523,
+  "totalRewardsEarnedCombined": 10.195159524252805,
+  "totalClaimed": 1.2253224402417633,
+  "totalUnclaimedPreTrim": 8.969837084011044,
+  "totalUnclaimedPostTrim": 7.175869667208835,
+  "trimPercentage": 20,
+  "trimAmount": 1.7939674168022082,
+  "poolCoveragePercentage": 27.80757536545852,
+  "poolCanCover": false,
+  "poolShortfall": 5.180434301372661,
+  "poolSurplus": 0,
+  "daysToYearEnd": 325.4898958333333,
+  "secondsToYearEnd": 28122327
+}

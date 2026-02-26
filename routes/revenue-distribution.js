@@ -15,6 +15,18 @@ import bs58 from "bs58";
 import secondarySaleVerificationService from "../services/secondarySaleVerification.js";
 import NFTVerificationService from "../services/nftVerification.js";
 import { distributeFees } from "../utils/feeDistribution.js";
+import {
+  REWARD_TIERS,
+  calculateHolderShare,
+  calculateTier3Rewards,
+  calculateRankBasedRewards,
+  mergeUserAllocations,
+  getSolPrice,
+} from "../utils/rewardTierCalculator.js";
+import {
+  getCurrentDistributionId,
+  getDistributionMonthName,
+} from "../utils/distributionScheduler.js";
 
 const router = express.Router();
 
@@ -25,10 +37,42 @@ const CONFIG = {
     process.env.REVENUE_DISTRIBUTION_AMOUNT_USD || "5.00",
   ),
 
-  // Multi-token distribution pool (weight-based)
+  // Multi-token distribution pool (weight-based) - LEGACY
   POOL_SOL: 0.16,
   POOL_EMPIRE: 22500,
   POOL_MKIN: 100000,
+
+  // NEW: Multi-tier reward structure (February 2026+)
+  REWARD_TIERS: {
+    HOLDER_SHARE: {
+      enabled: true,
+      minNfts: 1,
+      royaltyPercentage: 0.35, // 35% of royalty pool
+    },
+    TIER_3: {
+      enabled: true,
+      minNfts: 12,
+      poolSol: 1.5,
+    },
+    TIER_2: {
+      enabled: true,
+      maxRank: 5,
+      poolSol: 1.5,
+      poolMkin: 300000,
+    },
+    TIER_1: {
+      enabled: true,
+      maxRank: 3,
+      poolSol: 1.5,
+      poolEmpire: 450000,
+      poolMkin: 300000,
+    },
+  },
+
+  // Total royalty pool for the month (set via environment or admin)
+  TOTAL_ROYALTY_POOL_USD: parseFloat(
+    process.env.REVENUE_DISTRIBUTION_ROYALTY_POOL_USD || "1000",
+  ),
 
   // Token mint addresses
   EMPIRE_MINT: "EmpirdtfUMfBQXEjnNmTngeimjfizfuSBD3TN9zqzydj",
@@ -50,6 +94,9 @@ const CONFIG = {
   USER_REWARDS_COLLECTION: "userRewards",
   ALLOCATIONS_COLLECTION: "revenueDistributionAllocations",
   CLAIMS_COLLECTION: "revenueDistributionClaims",
+  
+  // Distribution schedule: 'last' = last day of month, or number 1-31
+  DISTRIBUTION_DAY: process.env.REVENUE_DISTRIBUTION_DAY || "last",
 };
 
 // Active contract addresses for NFT verification
@@ -67,16 +114,6 @@ function getConnection() {
     process.env.HELIUS_MAINNET_RPC_URL || process.env.SOLANA_RPC_URL,
     "confirmed",
   );
-}
-
-/**
- * Helper: Generate distribution ID for current month
- */
-function getCurrentDistributionId() {
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  return `revenue_dist_${year}_${month}`;
 }
 
 /**
@@ -364,41 +401,67 @@ router.post("/allocate", verifySecretToken, async (req, res) => {
       `✅ ${eligible.length} users eligible (secondary market check bypassed)`,
     );
 
-    // Step 4: Calculate weight-based shares
-    console.log(`\n📊 Step 4: Calculating weight-based distribution...`);
-    const totalNFTs = eligible.reduce(
-      (sum, user) => sum + user.totalRealmkin,
-      0,
-    );
-    console.log(`   Total NFTs across all eligible users: ${totalNFTs}`);
-    console.log(
-      `   Pool: ${CONFIG.POOL_SOL} SOL, ${CONFIG.POOL_EMPIRE} EMPIRE, ${CONFIG.POOL_MKIN} MKIN`,
+    // Step 4: Calculate MULTI-TIER rewards (February 2026+)
+    console.log(`\n📊 Step 4: Calculating multi-tier rewards...`);
+    
+    // Fetch secondary market leaderboard for Tier calculations
+    let secondaryMarketLeaderboard = [];
+    try {
+      const leaderboardModule = await import('./leaderboard.js');
+      // Get top 50 for tier calculations
+      secondaryMarketLeaderboard = await leaderboardModule.getSecondaryMarketLeaderboardData(50);
+      console.log(`   📊 Fetched ${secondaryMarketLeaderboard.length} entries from secondary market leaderboard`);
+    } catch (error) {
+      console.warn(`   ⚠️ Could not fetch secondary market leaderboard: ${error.message}`);
+    }
+
+    // Create map of wallet -> purchase count for Tier 3
+    const secondaryPurchaseMap = new Map(
+      secondaryMarketLeaderboard.map(e => [e.walletAddress, e.nftCount || e.purchaseCount || 0])
     );
 
-    // Calculate each user's share
-    const allocations = eligible.map((user) => {
-      const weight = user.totalRealmkin / totalNFTs;
-      return {
-        ...user,
-        weight: weight,
-        amountSol: CONFIG.POOL_SOL * weight,
-        amountEmpire: CONFIG.POOL_EMPIRE * weight,
-        amountMkin: CONFIG.POOL_MKIN * weight,
-      };
-    });
+    // Calculate each tier
+    const allTierAllocations = [];
 
-    // Log distribution summary
-    console.log(`\n📋 Distribution Summary:`);
-    console.log(`   Users: ${allocations.length}`);
-    console.log(`   Total SOL to distribute: ${CONFIG.POOL_SOL}`);
-    console.log(`   Total EMPIRE to distribute: ${CONFIG.POOL_EMPIRE}`);
-    console.log(`   Total MKIN to distribute: ${CONFIG.POOL_MKIN}`);
-    console.log(`\n   Top 5 allocations:`);
-    allocations.slice(0, 5).forEach((u, i) => {
+    // Holder Share: 35% royalty to all NFT holders (1+ NFTs)
+    const holderSharePool = CONFIG.TOTAL_ROYALTY_POOL_USD * CONFIG.REWARD_TIERS.HOLDER_SHARE.royaltyPercentage;
+    const holders = eligible.filter(u => u.totalRealmkin >= CONFIG.REWARD_TIERS.HOLDER_SHARE.minNfts);
+    const holderAllocations = calculateHolderShare(holders, holderSharePool);
+    allTierAllocations.push(...holderAllocations);
+    console.log(`   🏰 Holder Share: ${holderAllocations.length} users, ${holderSharePool} USD pool`);
+
+    // Tier 3: Special Perks (12+ NFTs)
+    const tier3Eligible = eligible.filter(u => u.totalRealmkin >= CONFIG.REWARD_TIERS.TIER_3.minNfts);
+    const tier3Allocations = calculateTier3Rewards(tier3Eligible, secondaryPurchaseMap);
+    allTierAllocations.push(...tier3Allocations);
+    console.log(`   🔱 Tier 3 (Special Perks): ${tier3Allocations.length} users, ${CONFIG.REWARD_TIERS.TIER_3.poolSol} SOL pool`);
+
+    // Tier 2: Top 5
+    const tier2Allocations = calculateRankBasedRewards(secondaryMarketLeaderboard, 'TIER_2');
+    allTierAllocations.push(...tier2Allocations);
+    console.log(`   ⚔️  Tier 2 (Top 5): ${tier2Allocations.length} users`);
+
+    // Tier 1: Top 3
+    const tier1Allocations = calculateRankBasedRewards(secondaryMarketLeaderboard, 'TIER_1');
+    allTierAllocations.push(...tier1Allocations);
+    console.log(`   👑 Tier 1 (Top 3): ${tier1Allocations.length} users`);
+
+    // Merge allocations per user (users can be in multiple tiers)
+    const mergedAllocations = mergeUserAllocations(allTierAllocations);
+    console.log(`\n   📋 Merged ${allTierAllocations.length} tier allocations → ${mergedAllocations.length} unique users`);
+
+    // Log top allocations
+    const topAllocations = mergedAllocations
+      .sort((a, b) => b.amountSol - a.amountSol)
+      .slice(0, 5);
+    console.log(`\n   Top 5 total allocations:`);
+    topAllocations.forEach((u, i) => {
       console.log(
-        `   ${i + 1}. ${u.userId} - ${u.totalRealmkin} NFTs (${(u.weight * 100).toFixed(2)}%) = ${u.amountSol.toFixed(6)} SOL + ${u.amountEmpire.toFixed(2)} EMPIRE + ${u.amountMkin.toFixed(2)} MKIN`,
+        `   ${i + 1}. ${u.userId} - Tiers: ${u.tiers.join(', ')} → ${u.amountSol.toFixed(6)} SOL + ${u.amountMkin.toLocaleString()} MKIN + ${u.amountEmpire.toLocaleString()} EMPIRE`,
       );
     });
+
+    const allocations = mergedAllocations;
 
     // Step 5: Store allocations in Firestore
     if (!isDryRun && allocations.length > 0) {
@@ -427,13 +490,27 @@ router.post("/allocate", verifySecretToken, async (req, res) => {
             distributionId,
             userId: user.userId,
             walletAddress: user.walletAddress,
-            nftCount: user.totalRealmkin,
-            weight: user.weight,
+            nftCount: user.nftCount || user.totalRealmkin || 0,
+            weight: user.totalWeight || user.weight || 0,
             amountSol: user.amountSol,
             amountEmpire: user.amountEmpire,
             amountMkin: user.amountMkin,
+            // NEW: Tier breakdown (February 2026+)
+            tiers: user.tiers || ['HOLDER_SHARE'],
+            holderShareSol: user.holderShare?.amountSol || 0,
+            holderShareEmpire: user.holderShare?.amountEmpire || 0,
+            holderShareMkin: user.holderShare?.amountMkin || 0,
+            tier3Sol: user.tier3?.amountSol || 0,
+            tier3Empire: user.tier3?.amountEmpire || 0,
+            tier3Mkin: user.tier3?.amountMkin || 0,
+            tier2Sol: user.tier2?.amountSol || 0,
+            tier2Empire: user.tier2?.amountEmpire || 0,
+            tier2Mkin: user.tier2?.amountMkin || 0,
+            tier1Sol: user.tier1?.amountSol || 0,
+            tier1Empire: user.tier1?.amountEmpire || 0,
+            tier1Mkin: user.tier1?.amountMkin || 0,
+            // Legacy fields for backward compatibility
             hasSecondarySale: false, // TEMPORARY: Set to false during testing (was true)
-            // Legacy field for backward compatibility
             allocatedAmountUsd: CONFIG.ALLOCATION_AMOUNT_USD,
             eligibleAt: now,
             expiresAt: expiresAt,
@@ -1073,6 +1150,32 @@ router.get("/check-eligibility", verifyFirebaseAuth, async (req, res) => {
       claimFeeUsd: CONFIG.CLAIM_FEE_USD,
       expiresAt: new Date(expiresAt).toISOString(),
       nftCount: allocation.nftCount,
+      // NEW: Tier breakdown (February 2026+)
+      userTiers: allocation.tiers || ['HOLDER_SHARE'],
+      tierBreakdown: {
+        holderShare: {
+          sol: allocation.holderShareSol || 0,
+          empire: allocation.holderShareEmpire || 0,
+          mkin: allocation.holderShareMkin || 0,
+        },
+        tier3: {
+          sol: allocation.tier3Sol || 0,
+          empire: allocation.tier3Empire || 0,
+          mkin: allocation.tier3Mkin || 0,
+        },
+        tier2: {
+          sol: allocation.tier2Sol || 0,
+          empire: allocation.tier2Empire || 0,
+          mkin: allocation.tier2Mkin || 0,
+        },
+        tier1: {
+          sol: allocation.tier1Sol || 0,
+          empire: allocation.tier1Empire || 0,
+          mkin: allocation.tier1Mkin || 0,
+        },
+      },
+      // Distribution month name for display
+      distributionMonth: getDistributionMonthName(distributionId),
     });
   } catch (error) {
     console.error("Error checking eligibility:", error);

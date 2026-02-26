@@ -1,0 +1,288 @@
+C:\Users\Ajibola Adedeji\Documents\GitHub\mkin\backend-api>npx ts-node scripts/tmp_rovodev_merge-user-rewards.js
+🧭 Wallet 7saRfPotj6uGoXC2txwEmdpZyzT2eRRZEXnfy372PD7: selecting primary YGaJwVY5eJe1KCxrSuM1v9hYRVm1 (withdrawals=5, totalClaimed=53521.63). Candidates: 4Lvhc1LBarbkFpHbKRaA9pQnPjx2:4Lvhc1LBarbkFpHbKRaA9pQnPjx2:0:3578.56
+📊 Withdrawal counts: YGaJwVY5eJe1KCxrSuM1v9hYRVm1:5
+📄 Duplicate details for wallet 7saRfPotj6uGoXC2txwEmdpZyzT2eRRZEXnfy372PD7
+{
+  "id": "4Lvhc1LBarbkFpHbKRaA9pQnPjx2",
+  "walletAddress": "7saRfPotj6uGoXC2txwEmdpZyzT2eRRZEXnfy372PD7",
+  "totalClaimed": 3578.56,
+  "totalEarned": 3578.56,
+  "totalRealmkin": 39778.56,
+  "pendingRewards": 0,
+  "weeklyRate": 600,
+  "totalNFTs": 8,
+  "lastCalculated": "2026-02-08T11:00:04.421Z",
+  "lastClaimed": "2026-02-08T11:00:04.421Z",
+  "createdAt": "2025-11-20T05:39:13.558Z",
+  "updatedAt": "2026-02-08T11:00:04.421Z"
+}
+✅ Merged wallet 7saRfPotj6uGoXC2txwEmdpZyzT2eRRZEXnfy372PD7 into YGaJwVY5eJe1KCxrSuM1v9hYRVm1
+🧭 Wallet DfWimY6spZAUHEhkY2ouw9KVhpocsuwkRD7uuozSHWUQ: selecting primary gsaRbOV697VYbEnRHqJz3nQPTZB3 (withdrawals=1, totalClaimed=5874.63). Candidates: 4a1ulmxzNjflgtGAJSa18ZAkinF3:4a1ulmxzNjflgtGAJSa18ZAkinF3:0:7023.64, Xb4o5xuouQhyVTyuEip9YE4C6M72:Xb4o5xuouQhyVTyuEip9YE4C6M72:0:370.53
+📊 Withdrawal counts: gsaRbOV697VYbEnRHqJz3nQPTZB3:1
+📄 Duplicate details for wallet DfWimY6spZAUHEhkY2ouw9KVhpocsuwkRD7uuozSHWUQ
+{
+  "id": "4a1ulmxzNjflgtGAJSa18ZAkinF3",
+  "walletAddress": "DfWimY6spZAUHEhkY2ouw9KVhpocsuwkRD7uuozSHWUQ",      
+  "totalClaimed": 7023.64,
+  "totalEarned": 2908.64,
+  "totalRealmkin": 2793.64,
+  "pendingRewards": 0,
+  "weeklyRate": 900,
+  "totalNFTs": 20,
+  "lastCalculated": "2026-02-08T11:00:05.952Z",
+  "lastClaimed": "2026-02-08T11:00:05.952Z",
+  "createdAt": "2026-01-06T03:11:17.376Z",
+  "updatedAt": "2026-02-08T11:00:05.952Z"
+}
+{
+  "id": "Xb4o5xuouQhyVTyuEip9YE4C6M72",
+  "walletAddress": "DfWimY6spZAUHEhkY2ouw9KVhpocsuwkRD7uuozSHWUQ",      
+  "totalClaimed": 370.53,
+  "totalEarned": 370.53,
+  "totalRealmkin": 1370.53,
+  "pendingRewards": 0,
+  "weeklyRate": 125,
+  "totalNFTs": 5,
+  "lastCalculated": "2026-02-08T11:00:06.338Z",
+  "lastClaimed": "2026-02-08T11:00:06.338Z",
+  "createdAt": "2026-01-13T08:42:21.300Z",
+  "updatedAt": "2026-02-08T11:00:06.338Z"
+}
+✅ Merged wallet DfWimY6spZAUHEhkY2ouw9KVhpocsuwkRD7uuozSHWUQ into gsaRbOV697VYbEnRHqJz3nQPTZB3
+🧭 Wallet Hk8ZYAkkGGeRvHXEn9rnUPU2L75ix7gkBuWF6Vqr34Ds: selecting primary J4RhQ1nzhRcxeoRnk3SN9qyiN5r2 (withdrawals=1, totalClaimed=2311.37). Candidates: 5YUkBWE8K0SBVYdIIgvrn8KmHOO2:5YUkBWE8K0SBVYdIIgvrn8KmHOO2:0:726.24
+📊 Withdrawal counts: J4RhQ1nzhRcxeoRnk3SN9qyiN5r2:1
+📄 Duplicate details for wallet Hk8ZYAkkGGeRvHXEn9rnUPU2L75ix7gkBuWF6Vqr34Ds
+{
+  "id": "5YUkBWE8K0SBVYdIIgvrn8KmHOO2",
+  "walletAddress": "Hk8ZYAkkGGeRvHXEn9rnUPU2L75ix7gkBuWF6Vqr34Ds",      
+  "totalClaimed": 726.24,
+  "totalEarned": 726.24,
+  "totalRealmkin": 37126.24,
+  "pendingRewards": 0,
+  "weeklyRate": 245,
+  "totalNFTs": 7,
+  "lastCalculated": "2026-02-08T11:00:05.108Z",
+  "lastClaimed": "2026-02-08T11:00:05.108Z",
+  "createdAt": "2025-12-12T06:22:12.238Z",
+  "updatedAt": "2026-02-08T11:00:05.108Z"
+}
+✅ Merged wallet Hk8ZYAkkGGeRvHXEn9rnUPU2L75ix7gkBuWF6Vqr34Ds into J4RhQ1nzhRcxeoRnk3SN9qyiN5r2
+🧭 Wallet H6jRGZyLdNfKZtp9S4SsBu79KEvn9FSqb3tWig9d1der: selecting primary 7qdPA3cZKoNTUeONsX3E5zwFbo63 (withdrawals=13, totalClaimed=291163.54000000004). Candidates: VUnHw6VdVgavivtYAeXJpxkfgms2:VUnHw6VdVgavivtYAeXJpxkfgms2:0:20357.08
+📊 Withdrawal counts: 7qdPA3cZKoNTUeONsX3E5zwFbo63:13
+📄 Duplicate details for wallet H6jRGZyLdNfKZtp9S4SsBu79KEvn9FSqb3tWig9d1der
+{
+  "id": "VUnHw6VdVgavivtYAeXJpxkfgms2",
+  "walletAddress": "H6jRGZyLdNfKZtp9S4SsBu79KEvn9FSqb3tWig9d1der",      
+  "totalClaimed": 20357.08,
+  "totalEarned": 20357.08,
+  "totalRealmkin": 58957.08,
+  "pendingRewards": 0,
+  "weeklyRate": 1200,
+  "totalNFTs": 6,
+  "lastCalculated": "2026-02-08T11:00:00.686Z",
+  "lastClaimed": "2026-02-08T11:00:00.686Z",
+  "createdAt": "2025-08-12T10:37:57.812Z",
+  "updatedAt": "2026-02-08T11:00:00.686Z"
+}
+✅ Merged wallet H6jRGZyLdNfKZtp9S4SsBu79KEvn9FSqb3tWig9d1der into 7qdPA3cZKoNTUeONsX3E5zwFbo63
+🧭 Wallet 8UT2DmNzAAVPpKEujZXUqZmvt4HdhdNkAgUgyHNoisjB: selecting primary 8O24ShlY0jf0GgkJrrI1YNJ0qQA3 (withdrawals=0, totalClaimed=244.46). Candidates: zmcMvaZq6pZahNQGy1cXssJWQwQ2:zmcMvaZq6pZahNQGy1cXssJWQwQ2:0:59.46
+📊 Withdrawal counts: none
+📄 Duplicate details for wallet 8UT2DmNzAAVPpKEujZXUqZmvt4HdhdNkAgUgyHNoisjB
+{
+  "id": "zmcMvaZq6pZahNQGy1cXssJWQwQ2",
+  "walletAddress": "8UT2DmNzAAVPpKEujZXUqZmvt4HdhdNkAgUgyHNoisjB",      
+  "totalClaimed": 59.46,
+  "totalEarned": 59.46,
+  "totalRealmkin": 59.46,
+  "pendingRewards": 0,
+  "weeklyRate": 15,
+  "totalNFTs": 1,
+  "lastCalculated": "2026-02-08T11:00:05.952Z",
+  "lastClaimed": "2026-02-08T11:00:05.952Z",
+  "createdAt": "2026-01-08T02:07:51.797Z",
+  "updatedAt": "2026-02-08T11:00:05.952Z"
+}
+✅ Merged wallet 8UT2DmNzAAVPpKEujZXUqZmvt4HdhdNkAgUgyHNoisjB into 8O24ShlY0jf0GgkJrrI1YNJ0qQA3
+🧭 Wallet F1p6dNLSSTHi4QkUkRVXZw8QurZJKUDcvVBjfF683nU: selecting primary BeVUl1Qop0Q81BqAvJIWLo0E7Qe2 (withdrawals=7, totalClaimed=73499.85). Candidates: fq9Q2vZtwuUBeZoyDtyoAXEaDCw1:fq9Q2vZtwuUBeZoyDtyoAXEaDCw1:0:2718.68
+📊 Withdrawal counts: BeVUl1Qop0Q81BqAvJIWLo0E7Qe2:7
+📄 Duplicate details for wallet F1p6dNLSSTHi4QkUkRVXZw8QurZJKUDcvVBjfF683nU
+{
+  "id": "fq9Q2vZtwuUBeZoyDtyoAXEaDCw1",
+  "walletAddress": "F1p6dNLSSTHi4QkUkRVXZw8QurZJKUDcvVBjfF683nU",       
+  "totalClaimed": 2718.68,
+  "totalEarned": 2718.68,
+  "totalRealmkin": 2718.68,
+  "pendingRewards": 0,
+  "weeklyRate": 1400,
+  "totalNFTs": 23,
+  "lastCalculated": "2026-02-08T11:00:06.776Z",
+  "lastClaimed": "2026-02-08T11:00:06.776Z",
+  "createdAt": "2026-02-01T20:45:34.201Z",
+  "updatedAt": "2026-02-08T11:00:06.776Z"
+}
+✅ Merged wallet F1p6dNLSSTHi4QkUkRVXZw8QurZJKUDcvVBjfF683nU into BeVUl1Qop0Q81BqAvJIWLo0E7Qe2
+🧭 Wallet ALPF8Qy7jrkoHHE4T4HThXj3QBZzh3Gq5P46WyWRWbbV: selecting primary EWT07Y7nZQVr1fnztXs3CvlW1eH2 (withdrawals=0, totalClaimed=16964.24). Candidates: JpfASa470AStzhkaUhEAR8B7WlT2:JpfASa470AStzhkaUhEAR8B7WlT2:0:12964.24
+📊 Withdrawal counts: none
+📄 Duplicate details for wallet ALPF8Qy7jrkoHHE4T4HThXj3QBZzh3Gq5P46WyWRWbbV
+{
+  "id": "JpfASa470AStzhkaUhEAR8B7WlT2",
+  "walletAddress": "ALPF8Qy7jrkoHHE4T4HThXj3QBZzh3Gq5P46WyWRWbbV",      
+  "totalClaimed": 12964.24,
+  "totalEarned": 12964.24,
+  "totalRealmkin": 49964.24,
+  "pendingRewards": 0,
+  "weeklyRate": 1000,
+  "totalNFTs": 5,
+  "lastCalculated": "2026-02-08T11:00:01.860Z",
+  "lastClaimed": "2026-02-08T11:00:01.860Z",
+  "createdAt": "2025-09-20T19:56:11.400Z",
+  "updatedAt": "2026-02-08T11:00:01.860Z"
+}
+✅ Merged wallet ALPF8Qy7jrkoHHE4T4HThXj3QBZzh3Gq5P46WyWRWbbV into EWT07Y7nZQVr1fnztXs3CvlW1eH2
+🧭 Wallet BRofRUhr1k9fqcpjncBR3xHPxWNW2tHYfYHFPxtqSbhv: selecting primary b173af07-9257-4bce-8735-d4a79dfcb6df (withdrawals=0, totalClaimed=3392.84). Candidates: IWuuUEMd5HMk6wHzEXs1xLZrM032:IWuuUEMd5HMk6wHzEXs1xLZrM032:0:3392.84
+📊 Withdrawal counts: OKngISNqZ0RrrmSjGBZMyBZXcM82:1
+📄 Duplicate details for wallet BRofRUhr1k9fqcpjncBR3xHPxWNW2tHYfYHFPxtqSbhv
+{
+  "id": "IWuuUEMd5HMk6wHzEXs1xLZrM032",
+  "walletAddress": "BRofRUhr1k9fqcpjncBR3xHPxWNW2tHYfYHFPxtqSbhv",      
+  "totalClaimed": 3392.84,
+  "totalEarned": 3392.84,
+  "totalRealmkin": 38992.84,
+  "pendingRewards": 0,
+  "weeklyRate": 200,
+  "totalNFTs": 1,
+  "lastCalculated": "2026-02-08T11:00:00.687Z",
+  "lastClaimed": "2026-02-08T11:00:00.687Z",
+  "createdAt": "2025-08-13T05:08:05.727Z",
+  "updatedAt": "2026-02-08T11:00:00.687Z"
+}
+✅ Merged wallet BRofRUhr1k9fqcpjncBR3xHPxWNW2tHYfYHFPxtqSbhv into b173af07-9257-4bce-8735-d4a79dfcb6df
+🧭 Wallet GqcsHDEJPRU6kc1uFyJDUf51MXwppNfSgNnYLQMej7PU: selecting primary zpgb5cLvyVWjGoxlAzKyj5NMh2h1 (withdrawals=0, totalClaimed=56028.88). Candidates: PQaDUK87oQYcGb5h9fPItk9trJk2:PQaDUK87oQYcGb5h9fPItk9trJk2:0:2667.82
+📊 Withdrawal counts: none
+📄 Duplicate details for wallet GqcsHDEJPRU6kc1uFyJDUf51MXwppNfSgNnYLQMej7PU
+{
+  "id": "PQaDUK87oQYcGb5h9fPItk9trJk2",
+  "walletAddress": "GqcsHDEJPRU6kc1uFyJDUf51MXwppNfSgNnYLQMej7PU",      
+  "totalClaimed": 2667.82,
+  "totalEarned": 2667.82,
+  "totalRealmkin": 6667.82,
+  "pendingRewards": 0,
+  "weeklyRate": 900,
+  "totalNFTs": 20,
+  "lastCalculated": "2026-02-08T11:00:06.338Z",
+  "lastClaimed": "2026-02-08T11:00:06.338Z",
+  "createdAt": "2026-01-10T00:23:32.137Z",
+  "updatedAt": "2026-02-08T11:00:06.338Z"
+}
+✅ Merged wallet GqcsHDEJPRU6kc1uFyJDUf51MXwppNfSgNnYLQMej7PU into zpgb5cLvyVWjGoxlAzKyj5NMh2h1
+🧭 Wallet 62DpHkt3h7r6CJECjtRQUoMnm3SJxUTzF5kNUGjs2325: selecting primary jCHtfWmFeqSjL0HnD2NuODMuJmg2 (withdrawals=2, totalClaimed=50530.44). Candidates: Q9dE70CpmqPNGoz26rIAvUuOivQ2:Q9dE70CpmqPNGoz26rIAvUuOivQ2:0:1630.33
+📊 Withdrawal counts: jCHtfWmFeqSjL0HnD2NuODMuJmg2:2
+📄 Duplicate details for wallet 62DpHkt3h7r6CJECjtRQUoMnm3SJxUTzF5kNUGjs2325
+{
+  "id": "Q9dE70CpmqPNGoz26rIAvUuOivQ2",
+  "walletAddress": "62DpHkt3h7r6CJECjtRQUoMnm3SJxUTzF5kNUGjs2325",      
+  "totalClaimed": 1630.33,
+  "totalEarned": 1630.33,
+  "totalRealmkin": 2630.33,
+  "pendingRewards": 0,
+  "weeklyRate": 550,
+  "totalNFTs": 5,
+  "lastCalculated": "2026-02-08T11:00:03.056Z",
+  "lastClaimed": "2026-02-08T11:00:03.056Z",
+  "createdAt": "2025-11-09T01:22:38.458Z",
+  "updatedAt": "2026-02-08T11:00:03.056Z"
+}
+✅ Merged wallet 62DpHkt3h7r6CJECjtRQUoMnm3SJxUTzF5kNUGjs2325 into jCHtfWmFeqSjL0HnD2NuODMuJmg2
+🧭 Wallet 5XTZ7TVNCQ943ubtx7MUnPFdEQ4nuPJxv2tsqEhGikEv: selecting primary fh4Hk5wI7EUOfoAtvgdccLOBNG63 (withdrawals=10, totalClaimed=149382.56). Candidates: Tk2etnIuyRgI4fpDZ773G8dJI5t2:Tk2etnIuyRgI4fpDZ773G8dJI5t2:0:1189.27
+📊 Withdrawal counts: fh4Hk5wI7EUOfoAtvgdccLOBNG63:10
+📄 Duplicate details for wallet 5XTZ7TVNCQ943ubtx7MUnPFdEQ4nuPJxv2tsqEhGikEv
+{
+  "id": "Tk2etnIuyRgI4fpDZ773G8dJI5t2",
+  "walletAddress": "5XTZ7TVNCQ943ubtx7MUnPFdEQ4nuPJxv2tsqEhGikEv",      
+  "totalClaimed": 1189.27,
+  "totalEarned": 1189.27,
+  "totalRealmkin": 36189.27,
+  "pendingRewards": 0,
+  "weeklyRate": 300,
+  "totalNFTs": 2,
+  "lastCalculated": "2026-02-08T11:00:05.108Z",
+  "lastClaimed": "2026-02-08T11:00:05.108Z",
+  "createdAt": "2025-12-07T19:45:09.158Z",
+  "updatedAt": "2026-02-08T11:00:05.108Z"
+}
+✅ Merged wallet 5XTZ7TVNCQ943ubtx7MUnPFdEQ4nuPJxv2tsqEhGikEv into fh4Hk5wI7EUOfoAtvgdccLOBNG63
+🧭 Wallet A2d1n915X2zyePJ1CL2U9TbhWjFKnGGKyJvpEdBLZ2QZ: selecting primary qclpy0idHiehopmg1r8H0FEWEDR2 (withdrawals=0, totalClaimed=314.09000000000003). Candidates: WvWcITZbYfY6An84km0pPOAJWJu1:WvWcITZbYfY6An84km0pPOAJWJu1:0:222.31
+📊 Withdrawal counts: none
+📄 Duplicate details for wallet A2d1n915X2zyePJ1CL2U9TbhWjFKnGGKyJvpEdBLZ2QZ
+{
+  "id": "WvWcITZbYfY6An84km0pPOAJWJu1",
+  "walletAddress": "A2d1n915X2zyePJ1CL2U9TbhWjFKnGGKyJvpEdBLZ2QZ",      
+  "totalClaimed": 222.31,
+  "totalEarned": 222.31,
+  "totalRealmkin": 822.31,
+  "pendingRewards": 0,
+  "weeklyRate": 75,
+  "totalNFTs": 3,
+  "lastCalculated": "2026-02-08T11:00:06.775Z",
+  "lastClaimed": "2026-02-08T11:00:06.775Z",
+  "createdAt": "2026-01-18T16:32:12.461Z",
+  "updatedAt": "2026-02-08T11:00:06.775Z"
+}
+✅ Merged wallet A2d1n915X2zyePJ1CL2U9TbhWjFKnGGKyJvpEdBLZ2QZ into qclpy0idHiehopmg1r8H0FEWEDR2
+🧭 Wallet 5smPAEUze9QYfghK4gehpXnSTh49tuixoDTb81UnH9qp: selecting primary dBjsWRzbUyUQHQFFdQsz6DHHb2w2 (withdrawals=0, totalClaimed=5706.16). Candidates: YFEqEMv6gJMfAvZdIsU4cHYwZiT2:YFEqEMv6gJMfAvZdIsU4cHYwZiT2:0:3175
+📊 Withdrawal counts: none
+📄 Duplicate details for wallet 5smPAEUze9QYfghK4gehpXnSTh49tuixoDTb81UnH9qp
+{
+  "id": "YFEqEMv6gJMfAvZdIsU4cHYwZiT2",
+  "walletAddress": "5smPAEUze9QYfghK4gehpXnSTh49tuixoDTb81UnH9qp",      
+  "totalClaimed": 3175,
+  "totalEarned": 3175,
+  "totalRealmkin": 10175,
+  "pendingRewards": 0,
+  "weeklyRate": 0,
+  "totalNFTs": 35,
+  "lastCalculated": "2026-02-08T11:00:06.222Z",
+  "lastClaimed": "2026-01-19T09:04:49.446Z",
+  "createdAt": "2026-01-09T20:34:15.547Z",
+  "updatedAt": "2026-02-08T11:00:06.222Z"
+}
+✅ Merged wallet 5smPAEUze9QYfghK4gehpXnSTh49tuixoDTb81UnH9qp into dBjsWRzbUyUQHQFFdQsz6DHHb2w2
+🧭 Wallet 51Aeb6XE819mH7SVSmaejN318uKkehM1W6TBduq1nsjX: selecting primary a1Pu8Vruq7hOrBiqJeVXmZl4LJy1 (withdrawals=0, totalClaimed=0). Candidates: otPrG5JkhrbTBrZcASkiSOOsqns2:otPrG5JkhrbTBrZcASkiSOOsqns2:0:0       
+📊 Withdrawal counts: none
+📄 Duplicate details for wallet 51Aeb6XE819mH7SVSmaejN318uKkehM1W6TBduq1nsjX
+{
+  "id": "otPrG5JkhrbTBrZcASkiSOOsqns2",
+  "walletAddress": "51Aeb6XE819mH7SVSmaejN318uKkehM1W6TBduq1nsjX",      
+  "totalClaimed": 0,
+  "totalEarned": 0,
+  "totalRealmkin": 100,
+  "pendingRewards": 0,
+  "weeklyRate": 0,
+  "totalNFTs": 0,
+  "lastCalculated": "2026-02-08T11:00:01.669Z",
+  "lastClaimed": null,
+  "createdAt": "2025-08-31T15:58:50.257Z",
+  "updatedAt": "2026-02-08T11:00:01.669Z"
+}
+✅ Merged wallet 51Aeb6XE819mH7SVSmaejN318uKkehM1W6TBduq1nsjX into a1Pu8Vruq7hOrBiqJeVXmZl4LJy1
+🧭 Wallet HftzJun911SWbYTyiL6Two3jWXFU3RMbq6rawsXhaeBF: selecting primary hftzjun911swbytyil6two3jwxfu3rmbq6rawsxhaebf (withdrawals=3, totalClaimed=89975). Candidates: v9bMsQqKRggwqRjqp7JJonoMHEf1:v9bMsQqKRggwqRjqp7JJonoMHEf1:0:33461.35
+📊 Withdrawal counts: hftzjun911swbytyil6two3jwxfu3rmbq6rawsxhaebf:3
+📄 Duplicate details for wallet HftzJun911SWbYTyiL6Two3jWXFU3RMbq6rawsXhaeBF
+{
+  "id": "v9bMsQqKRggwqRjqp7JJonoMHEf1",
+  "walletAddress": "HftzJun911SWbYTyiL6Two3jWXFU3RMbq6rawsXhaeBF",      
+  "totalClaimed": 33461.35,
+  "totalEarned": 13561.35,
+  "totalRealmkin": 61.35,
+  "pendingRewards": 0,
+  "weeklyRate": 50,
+  "totalNFTs": 2,
+  "lastCalculated": "2026-02-08T11:00:03.055Z",
+  "lastClaimed": "2026-02-08T11:00:03.055Z",
+  "createdAt": "2025-10-17T00:32:45.050Z",
+  "updatedAt": "2026-02-08T11:00:03.055Z"
+}
+✅ Merged wallet HftzJun911SWbYTyiL6Two3jWXFU3RMbq6rawsXhaeBF into hftzjun911swbytyil6two3jwxfu3rmbq6rawsxhaebf
+🎯 Done. 16 duplicate docs  merged (16 duplicates found).
+
+C:\Users\Ajibola Adedeji\Documents\GitHub\mkin\backend-api>

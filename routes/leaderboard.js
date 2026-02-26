@@ -584,10 +584,10 @@ router.get('/secondary-market', async (req, res) => {
       source: 'secondarySaleCache',
       cached: false
     };
-    
+
     // Cache the response
     setCachedData(cacheKey, response);
-    
+
     res.json(response);
   } catch (error) {
     console.error('[Leaderboard] Error fetching secondary market leaderboard:', error);
@@ -597,5 +597,97 @@ router.get('/secondary-market', async (req, res) => {
     });
   }
 });
+
+/**
+ * GET /api/leaderboard/secondary-market/top3
+ * Get top 3 secondary market buyers (for revenue distribution)
+ */
+router.get('/secondary-market/top3', async (req, res) => {
+  try {
+    const limit = 3;
+    const cacheKey = `secondaryMarket_top${limit}`;
+
+    // Check cache first
+    const cached = getCachedData(cacheKey);
+    if (cached && cached.leaderboard) {
+      return res.json({
+        success: true,
+        top3: cached.leaderboard.slice(0, 3),
+        cached: true,
+      });
+    }
+
+    // Fetch fresh data
+    const db = admin.firestore();
+    const cacheRef = db.collection('secondarySaleCache');
+    const cacheSnapshot = await cacheRef.get();
+
+    if (cacheSnapshot.empty) {
+      return res.json({
+        success: true,
+        top3: [],
+        message: 'No secondary market data available yet',
+      });
+    }
+
+    // Filter and sort
+    const sortedDocs = cacheSnapshot.docs
+      .map(doc => ({ id: doc.id, ...doc.data() }))
+      .filter(doc => (doc.salesCount || 0) > 0)
+      .sort((a, b) => (b.salesCount || 0) - (a.salesCount || 0))
+      .slice(0, limit);
+
+    const top3 = sortedDocs.map((cacheData, index) => ({
+      rank: index + 1,
+      userId: cacheData.userId || cacheData.id,
+      username: cacheData.username || `User ${cacheData.walletAddress?.slice(0, 6) || 'Unknown'}`,
+      nftCount: cacheData.salesCount || 0,
+      walletAddress: cacheData.walletAddress || cacheData.id,
+      avatarUrl: cacheData.avatarUrl,
+    }));
+
+    res.json({
+      success: true,
+      top3,
+      cached: false,
+    });
+  } catch (error) {
+    console.error('[Leaderboard] Error fetching top 3:', error);
+    res.status(500).json({
+      error: 'Failed to fetch top 3',
+      details: error.message,
+    });
+  }
+});
+
+/**
+ * Export helper function for revenue distribution to fetch leaderboard data directly
+ * @param {number} limit - Number of entries to fetch
+ * @returns {Promise<Array>} Leaderboard entries
+ */
+export async function getSecondaryMarketLeaderboardData(limit = 50) {
+  const db = admin.firestore();
+  const cacheRef = db.collection('secondarySaleCache');
+  const cacheSnapshot = await cacheRef.get();
+
+  if (cacheSnapshot.empty) {
+    return [];
+  }
+
+  // Filter and sort
+  const sortedDocs = cacheSnapshot.docs
+    .map(doc => ({ id: doc.id, ...doc.data() }))
+    .filter(doc => (doc.salesCount || 0) > 0)
+    .sort((a, b) => (b.salesCount || 0) - (a.salesCount || 0))
+    .slice(0, limit);
+
+  return sortedDocs.map(cacheData => ({
+    userId: cacheData.userId || cacheData.id,
+    walletAddress: cacheData.walletAddress || cacheData.id,
+    nftCount: cacheData.salesCount || 0,
+    purchaseCount: cacheData.salesCount || 0,
+    username: cacheData.username,
+  }));
+}
 
 export default router;
