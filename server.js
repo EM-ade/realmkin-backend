@@ -643,10 +643,18 @@ async function setupSecondaryMarketRefresh() {
 /**
  * Setup automatic monthly revenue distribution
  * Runs on the 27th of every month at 12:00 PM WAT (Nigerian time)
+ * 
+ * ⚠️ PAUSED: Temporarily disabled as of 2026-02-27
+ * To re-enable: Remove the early return and uncomment the cron.schedule block
  */
 async function setupAutomaticRevenueDistribution() {
+  // ⚠️ PAUSED: Early return to prevent scheduler from running
+  console.log("⏸️  [API] Automatic revenue distribution is currently PAUSED. Skipping setup.");
+  return;
+
+  /* ORIGINAL CODE BELOW - DO NOT DELETE, JUST COMMENTED OUT FOR PAUSE
   console.log("[API] Setting up automatic revenue distribution (27th of every month at 12:00 PM WAT)...");
-  
+
   try {
     // Schedule cron job: 27th of every month at 12:00 PM WAT
     // Cron format: minute hour day-of-month month day-of-week
@@ -654,25 +662,25 @@ async function setupAutomaticRevenueDistribution() {
     cron.schedule('0 12 27 * *', async () => {
       try {
         console.log("⏰ [API] Automatic monthly revenue distribution triggered");
-        
+
         // Import revenue distribution service
         const revenueModule = await import("./routes/revenue-distribution.js");
-        
+
         // Call the allocation endpoint internally
         const db = admin.firestore();
         const date = new Date();
         const year = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, '0');
         const distributionId = `revenue_dist_${year}_${month}`;
-        
+
         console.log(`💰 [API] Starting revenue distribution: ${distributionId}`);
-        
+
         // Note: This would need the actual allocation logic
         // For now, log that manual trigger is still recommended
         console.log("⚠️  [API] Automatic revenue distribution scheduled");
         console.log("💡 [API] For safety, please use the manual script for now:");
         console.log("    node scripts/run-production-revenue-distribution.js");
-        
+
         // Send Discord notification
         try {
           const { sendDiscordAlert } = await import("./utils/discordAlerts.js");
@@ -689,7 +697,7 @@ async function setupAutomaticRevenueDistribution() {
         }
       } catch (error) {
         console.error("❌ [API] Automatic revenue distribution check failed:", error.message);
-        
+
         // Send Discord notification on failure
         try {
           const { sendDiscordAlert } = await import("./utils/discordAlerts.js");
@@ -707,12 +715,13 @@ async function setupAutomaticRevenueDistribution() {
       scheduled: true,
       timezone: "Africa/Lagos" // Nigerian time (WAT - UTC+1)
     });
-    
+
     console.log("✅ [API] Automatic revenue distribution reminder initialized");
     console.log("📅 [API] Next reminder: 27th of next month at 12:00 PM WAT");
   } catch (error) {
     console.error("[API] Failed to initialize revenue distribution reminder:", error.message);
   }
+  */
 }
 
 /**
