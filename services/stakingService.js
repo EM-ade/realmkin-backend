@@ -437,34 +437,23 @@ class StakingService {
     }
     console.log(`${logPrefix} ✅ User wallet found: ${userWallet}`);
 
-    // 1. Calculate 5% entry fee + $0.80 site fee in SOL
-    console.log(`${logPrefix} 💰 Step 1: Calculating 5% entry fee + $0.80 site fee...`);
-    const { calculateStakingFee } = await import("../utils/mkinPrice.js");
-    const feeData = await calculateStakingFee(amount, 5);
-    
-    // Add $0.90 site fee (Maintenance $0.25 + Team $0.10 + Treasury $0.55)
+    // 1. Calculate $10 flat entry fee in SOL
+    console.log(`${logPrefix} 💰 Step 1: Calculating $10 flat entry fee...`);
     const { getFeeInSol } = await import("../utils/solPrice.js");
-    const siteFeeData = await getFeeInSol(0.90); // $0.90 USD
-    const totalFeeInSol = feeData.feeInSol + siteFeeData.solAmount;
-    
+    const feeData = await getFeeInSol(10.0); // $10 USD flat fee
+
+    const totalFeeInSol = feeData.solAmount;
+
     console.log(`${logPrefix} Fee Calculation Results:`);
     console.log(
-      `${logPrefix}   - 5% fee in SOL: ${feeData.feeInSol.toFixed(9)} SOL`,
-    );
-    console.log(
-      `${logPrefix}   - Site fee ($0.80): ${siteFeeData.solAmount.toFixed(9)} SOL`,
+      `${logPrefix}   - Flat fee ($10): ${feeData.solAmount.toFixed(9)} SOL`,
     );
     console.log(
       `${logPrefix}   - Total fee in SOL: ${totalFeeInSol.toFixed(9)} SOL`,
     );
-    console.log(
-      `${logPrefix}   - Fee in MKIN value: ${feeData.feeInMkin} MKIN`,
-    );
-    console.log(`${logPrefix}   - Fee percent: ${feeData.feePercent}%`);
-    console.log(`${logPrefix}   - MKIN price (USD): $${feeData.mkinPriceUsd}`);
     console.log(`${logPrefix}   - SOL price (USD): $${feeData.solPriceUsd}`);
 
-    // 2. Verify fee payment (5% + $0.80 in SOL)
+    // 2. Verify fee payment ($10 flat in SOL)
     // Allow 100% tolerance for rounding/timing differences between frontend and backend
     console.log(`${logPrefix} 🔍 Step 2: Verifying fee payment...`);
     const tolerance = 1.0; // 100% (VERY LAX)
@@ -626,10 +615,10 @@ class StakingService {
 
         // 🚀 ADD ENTRY FEE TO REWARD POOL (Self-Sustaining Pool Growth!)
         const previousRewardPool = poolData.reward_pool_sol || 0;
-        poolData.reward_pool_sol = previousRewardPool + feeData.feeInSol;
+        poolData.reward_pool_sol = previousRewardPool + feeData.solAmount;
         console.log(`${logPrefix}   💰 Entry fee added to reward pool:`);
         console.log(
-          `${logPrefix}     - Fee: ${feeData.feeInSol.toFixed(9)} SOL`,
+          `${logPrefix}     - Fee: ${feeData.solAmount.toFixed(9)} SOL`,
         );
         console.log(
           `${logPrefix}     - Pool before: ${previousRewardPool.toFixed(9)} SOL`,

@@ -36,10 +36,18 @@ router.post("/calculate-fee", async (req, res) => {
       return res.status(400).json({ error: "Invalid amount" });
     }
 
-    const { calculateStakingFee } = await import("../utils/mkinPrice.js");
-    const feeData = await calculateStakingFee(Number(amount), 5);
+    // $10 flat fee - amount parameter is ignored, kept for API compatibility
+    const { getFeeInSol } = await import("../utils/solPrice.js");
+    const feeData = await getFeeInSol(10.0); // $10 USD flat fee
 
-    res.json(feeData);
+    res.json({
+      feeInSol: feeData.solAmount,
+      feeInMkin: 0, // No longer percentage-based
+      mkinPriceUsd: 0,
+      solPriceUsd: feeData.solPriceUsd,
+      feePercent: 0, // Flat fee, not percentage
+      flatFeeUsd: 10.0,
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
