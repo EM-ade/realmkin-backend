@@ -44,7 +44,7 @@ router.post("/calculate-fee", async (req, res) => {
       feeInSol: feeData.solAmount,
       feeInMkin: 0, // No longer percentage-based
       mkinPriceUsd: 0,
-      solPriceUsd: feeData.solPriceUsd,
+      solPriceUsd: feeData.solPrice,
       feePercent: 0, // Flat fee, not percentage
       flatFeeUsd: 10.0,
     });
