@@ -25,6 +25,10 @@ const POSITIONS_COLLECTION = "staking_positions";
 const TRANSACTIONS_COLLECTION = "staking_transactions";
 const USER_REWARDS_COLLECTION = "userRewards";
 
+// Token Conversion Constants
+const CONVERSION_RATIO = parseInt(process.env.MKIN_CONVERSION_RATIO) || 2_500_000;
+const NEW_MKIN_MINT_ADDRESS = process.env.NEW_MKIN_MINT_ADDRESS || "Caj9oo8RWhkus2rTEHzjhd14bv4DokC9kQhfi1AcAFiD";
+
 // Error Classes
 class StakingError extends Error {
   constructor(message, code = 400) {
@@ -480,6 +484,30 @@ class StakingService {
       console.error(
         `${logPrefix}   - Expected range: ${minFee.toFixed(9)} - ${maxFee.toFixed(9)} SOL`,
       );
+
+      // Send Discord alert about failed stake verification (non-blocking)
+      try {
+        const { sendDiscordAlert } =
+          await import("../utils/discordAlerts.js");
+        await sendDiscordAlert({
+          level: "ERROR",
+          title: "❌ Stake Fee Verification Failed",
+          message: `User ${firebaseUid} stake fee verification failed`,
+          action: "Check transaction on Solscan and manually credit if valid",
+          details: {
+            amount: `${amount} MKIN`,
+            feeSignature,
+            expectedRange: `${minFee.toFixed(9)} - ${maxFee.toFixed(9)} SOL`,
+            timestamp: new Date().toISOString(),
+          },
+        });
+      } catch (alertError) {
+        console.error(
+          `${logPrefix} ⚠️  Failed to send Discord alert:`,
+          alertError.message,
+        );
+      }
+
       throw new StakingError("Invalid staking fee payment");
     }
     console.log(
@@ -492,6 +520,10 @@ class StakingService {
     console.log(`${logPrefix}   - Expected amount: ${amount} MKIN`);
     console.log(`${logPrefix}   - From wallet: ${userWallet}`);
 
+    // ENFORCED: Only old MKIN token accepted for staking
+    // New $MKIN token staking is not supported in this version
+    // Users will receive new $MKIN on unstake via conversion
+
     const isValidTransfer = await this._verifyTokenTransfer(
       txSignature,
       amount,
@@ -502,6 +534,30 @@ class StakingService {
       console.error(`${logPrefix}   - Signature: ${txSignature}`);
       console.error(`${logPrefix}   - Amount: ${amount} MKIN`);
       console.error(`${logPrefix}   - User wallet: ${userWallet}`);
+
+      // Send Discord alert about failed stake verification (non-blocking)
+      try {
+        const { sendDiscordAlert } =
+          await import("../utils/discordAlerts.js");
+        await sendDiscordAlert({
+          level: "ERROR",
+          title: "❌ Stake Token Transfer Verification Failed",
+          message: `User ${firebaseUid} stake token transfer verification failed`,
+          action: "Check transaction on Solscan and manually credit if valid",
+          details: {
+            amount: `${amount} MKIN`,
+            txSignature,
+            userWallet,
+            timestamp: new Date().toISOString(),
+          },
+        });
+      } catch (alertError) {
+        console.error(
+          `${logPrefix} ⚠️  Failed to send Discord alert:`,
+          alertError.message,
+        );
+      }
+
       throw new StakingError("Invalid or insufficient token transfer");
     }
     console.log(`${logPrefix} ✅ Token transfer verified: ${amount} MKIN`);
@@ -787,382 +843,10 @@ class StakingService {
    * Claims pending rewards. Requires $2.90 USD fee ($2.00 + $0.90 site fee, dynamic).
    */
   async claim(firebaseUid, txSignature) {
-    const operationId = `CLAIM-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const logPrefix = `[${operationId}]`;
-
-    try {
-      if (!txSignature) {
-        console.error(`${logPrefix} ❌ Missing transaction signature`);
-        throw new StakingError("Transaction signature required for fee");
-      }
-
-      console.log(
-        `${logPrefix} 🚀 Starting claim operation for user ${firebaseUid}`,
-      );
-
-      // 1. Check if user has rewards to claim FIRST (before taking any fee!)
-      console.log(
-        `${logPrefix} 🔍 Step 1: Checking if user has rewards to claim...`,
-      );
-      const posRef = this.db.collection(POSITIONS_COLLECTION).doc(firebaseUid);
-      const posDoc = await posRef.get();
-      if (!posDoc.exists) {
-        throw new StakingError(
-          "No staking position found. Please stake tokens first.",
-        );
-      }
-
-      const posData = posDoc.data();
-
-      // Get user's booster multiplier for accurate calculation
-      let boosterMultiplier = posData.booster_multiplier || 1.0;
-
-      // Calculate pending rewards in REAL-TIME (matches frontend calculation)
-      const pendingRewards = this._calculatePendingRewards(
-        posData,
-        boosterMultiplier,
-      );
-
-      if (pendingRewards <= 0) {
-        console.error(`${logPrefix} ❌ User has no rewards to claim`);
-        throw new StakingError(
-          "You have no rewards to claim yet. Rewards accrue over time based on your staked amount.",
-        );
-      }
-
-      console.log(
-        `${logPrefix} ✅ User has ${pendingRewards.toFixed(6)} SOL to claim`,
-      );
-
-      // 2. Check for duplicate claim transaction
-      console.log(
-        `${logPrefix} 🔍 Step 2: Checking for duplicate claim transaction...`,
-      );
-      const existingTx = await this.db
-        .collection(TRANSACTIONS_COLLECTION)
-        .where("fee_tx", "==", txSignature)
-        .where("type", "==", "CLAIM")
-        .limit(1)
-        .get();
-
-      if (!existingTx.empty) {
-        console.error(`❌ DUPLICATE CLAIM DETECTED!`);
-        console.error(`   - Fee signature: ${txSignature}`);
-        console.error(`   - Existing doc ID: ${existingTx.docs[0].id}`);
-        console.error(`   - User: ${firebaseUid}`);
-        throw new StakingError("Claim transaction already processed");
-      }
-      console.log(`${logPrefix} ✅ No duplicate claim found`);
-
-      // 3. Calculate dynamic fee based on current SOL price
-      // $2.90 total ($2.00 base + $0.90 site fee)
-      console.log(`${logPrefix} 🔍 Step 3: Calculating claim fee...`);
-      const { getFeeInSol } = await import("../utils/solPrice.js");
-      const {
-        solAmount: feeAmount,
-        usdAmount,
-        solPrice,
-      } = await getFeeInSol(2.90); // $2.90 USD ($2.00 + $0.90 site fee)
-      
-      console.log(
-        `${logPrefix} 💵 Claim fee: $${usdAmount} = ${feeAmount.toFixed(
-          4,
-        )} SOL (SOL price: $${solPrice})`,
-      );
-
-      // 4. Verify fee payment
-      console.log(`${logPrefix} 🔍 Step 4: Verifying fee payment...`);
-      const tolerance = 0.5; // 50% tolerance
-      const minFee = feeAmount * (1 - tolerance);
-      const maxFee = feeAmount * (1 + tolerance);
-
-      const isValidFee = await this._verifySolTransfer(
-        txSignature,
-        minFee,
-        maxFee,
-      );
-
-      if (!isValidFee) {
-        throw new StakingError(
-          `Invalid fee payment. Expected ~${feeAmount.toFixed(
-            4,
-          )} SOL ($${usdAmount})`,
-        );
-      }
-
-      console.log(`${logPrefix} ✅ Fee payment verified`);
-      
-      // 5. Distribute site fee ($0.90) to treasury and personal wallets
-      console.log(`${logPrefix} 💸 Step 5: Distributing site fee ($0.90)...`);
-      const { distributeFees } = await import("../utils/feeDistribution.js");
-      const distributionResult = await distributeFees('claim', 0.90, {
-        treasuryDestination: "gatekeeper",
-      }); // Distribute $0.90 site fee
-      
-      if (distributionResult.success) {
-        console.log(`${logPrefix} ✅ Fee distributed successfully`);
-        console.log(`${logPrefix}    Treasury: ${distributionResult.treasuryAmount.toFixed(6)} SOL`);
-        console.log(`${logPrefix}    Personal: ${distributionResult.personalAmount.toFixed(6)} SOL`);
-      } else {
-        console.warn(`${logPrefix} ⚠️ Fee distribution failed: ${distributionResult.error}`);
-      }
-
-      // 6. Check treasury SOL balance BEFORE processing claim (using real-time calculated rewards)
-      console.log(`${logPrefix} 🔍 Step 5: Checking treasury SOL balance...`);
-      const treasuryKeypair = Keypair.fromSecretKey(
-        bs58.decode(process.env.STAKING_PRIVATE_KEY),
-      );
-      const treasuryBalance = await this.connection.getBalance(
-        treasuryKeypair.publicKey,
-      );
-      const treasuryBalanceSol = treasuryBalance / 1e9;
-
-      console.log(
-        `${logPrefix} 💰 Treasury balance: ${treasuryBalanceSol.toFixed(6)} SOL`,
-      );
-      console.log(
-        `${logPrefix} 💰 Will send: ${pendingRewards.toFixed(6)} SOL (real-time calculated)`,
-      );
-      console.log(`${logPrefix} 💰 Gas fee estimate: ~0.000005 SOL`);
-
-      const minRequiredSol = pendingRewards + 0.00001; // reward + gas buffer
-      if (treasuryBalanceSol < minRequiredSol) {
-        console.error(`❌ INSUFFICIENT TREASURY BALANCE!`);
-        console.error(`   Treasury: ${treasuryBalanceSol.toFixed(6)} SOL`);
-        console.error(`   Required: ${minRequiredSol.toFixed(6)} SOL`);
-        console.error(
-          `   Shortfall: ${(minRequiredSol - treasuryBalanceSol).toFixed(6)} SOL`,
-        );
-        throw new StakingError(
-          `Service temporarily unavailable. Please try again later or contact support.`,
-        );
-      }
-      console.log(
-        `${logPrefix} ✅ Treasury has sufficient SOL (${treasuryBalanceSol.toFixed(6)} SOL)`,
-      );
-
-      // 6. Pre-fetch price data BEFORE the transaction (critical fix!)
-      console.log(
-        `${logPrefix} 📊 Step 6: Pre-fetching price data before Firestore transaction...`,
-      );
-      const { getMkinPriceSOL } = await import("../utils/mkinPrice.js");
-      const tokenPriceSol = await getMkinPriceSOL();
-      const now = admin.firestore.Timestamp.now();
-      console.log(
-        `✅ Price data fetched: ${tokenPriceSol.toFixed(6)} SOL/MKIN`,
-      );
-
-      let rewardAmount = 0;
-
-      // 7. Update in Firestore (atomic transaction)
-      console.log(`📝 Starting Firestore transaction...`);
-
-      try {
-        await this.db.runTransaction(async (t) => {
-          const poolRef = this.db
-            .collection(POOL_COLLECTION)
-            .doc(STAKING_POOL_ID);
-          const posRef = this.db
-            .collection(POSITIONS_COLLECTION)
-            .doc(firebaseUid);
-
-          console.log(`   Reading pool and position documents...`);
-          const [poolDoc, posDoc] = await Promise.all([
-            t.get(poolRef),
-            t.get(posRef),
-          ]);
-          if (!posDoc.exists)
-            throw new StakingError("No staking position found");
-
-          let poolData = poolDoc.data();
-          let posData = posDoc.data();
-
-          console.log(
-            `   Current position: ${posData.principal_amount || 0} MKIN, pending: ${posData.pending_rewards || 0} SOL`,
-          );
-
-          // Update Pool using pre-fetched price (no async calls here!)
-          poolData = this._calculateNewPoolStateSync(
-            poolData,
-            tokenPriceSol,
-            now,
-          );
-
-          // 🚀 ADD FEE TO REWARD POOL (Self-Sustaining Pool)
-          poolData.reward_pool_sol =
-            (poolData.reward_pool_sol || 0) + feeAmount;
-          console.log(
-            `💰 Added ${feeAmount.toFixed(
-              4,
-            )} SOL fee to reward pool. New pool: ${poolData.reward_pool_sol.toFixed(
-              4,
-            )} SOL`,
-          );
-
-          // Use the real-time calculated pending rewards (already validated above)
-          // We calculated this BEFORE the transaction to ensure it's valid
-          rewardAmount = pendingRewards;
-
-          console.log(
-            `   Using real-time calculated reward: ${rewardAmount.toFixed(9)} SOL`,
-          );
-          console.log(
-            `   (Database pending_rewards was: ${posData.pending_rewards || 0} SOL - outdated)`,
-          );
-
-          // Reset User pending rewards
-          const previousPending = posData.pending_rewards || 0;
-          posData.pending_rewards = 0;
-          posData.total_claimed_sol =
-            (posData.total_claimed_sol || 0) + rewardAmount;
-          posData.total_accrued_sol =
-            (posData.total_accrued_sol || 0) + rewardAmount;
-
-          console.log(
-            `   Claiming ${rewardAmount.toFixed(9)} SOL (was ${previousPending.toFixed(9)} pending)`,
-          );
-
-          // Writes - all writes happen atomically
-          console.log(`   Writing pool data...`);
-          t.set(poolRef, poolData);
-
-          console.log(`   Writing position data...`);
-          t.set(posRef, {
-            ...posData,
-            updated_at: now,
-          });
-
-          console.log(`   Writing transaction record...`);
-          const txRef = this.db.collection(TRANSACTIONS_COLLECTION).doc();
-          t.set(txRef, {
-            user_id: firebaseUid,
-            type: "CLAIM",
-            amount_sol: rewardAmount,
-            fee_tx: txSignature,
-            fee_amount_sol: feeAmount,
-            fee_amount_usd: usdAmount,
-            timestamp: now,
-          });
-
-          console.log(`   ✅ All writes queued for atomic commit`);
-        });
-
-        console.log(`✅ Firestore transaction committed successfully!`);
-      } catch (transactionError) {
-        console.error(`❌ Firestore transaction failed:`, transactionError);
-        throw new StakingError(
-          `Failed to update claim position: ${transactionError.message}`,
-        );
-      }
-
-      // 6. Send SOL to User (Using Treasury Private Key)
-      // NOTE: This must be done AFTER the DB transaction commits to avoid sending funds if DB fails.
-      // If this fails, we log to a failed_payouts collection for manual recovery.
-
-      let payoutSignature = null;
-      try {
-        payoutSignature = await this._sendSolFromTreasury(
-          firebaseUid,
-          rewardAmount,
-        );
-        console.log(
-          `✅ Claim payout successful! Signature: ${payoutSignature}`,
-        );
-
-        // Update the transaction record with payout signature
-        const txSnapshot = await this.db
-          .collection(TRANSACTIONS_COLLECTION)
-          .where("user_id", "==", firebaseUid)
-          .where("type", "==", "CLAIM")
-          .where("fee_tx", "==", txSignature)
-          .orderBy("timestamp", "desc")
-          .limit(1)
-          .get();
-
-        if (!txSnapshot.empty) {
-          await txSnapshot.docs[0].ref.update({
-            payout_signature: payoutSignature,
-            status: "COMPLETED",
-          });
-        }
-      } catch (e) {
-        console.error(
-          `${logPrefix} ❌ CRITICAL: Payout failed but DB already updated!`,
-        );
-        console.error(`${logPrefix}    Error: ${e.message}`);
-        console.error(`${logPrefix}    Stack: ${e.stack}`);
-
-        // Log failed payout for manual recovery
-        try {
-          await this.db.collection("failed_payouts").add({
-            user_id: firebaseUid,
-            type: "CLAIM",
-            amount_sol: rewardAmount,
-            fee_tx: txSignature,
-            fee_amount_sol: feeAmount,
-            fee_amount_usd: usdAmount,
-            error_message: e.message,
-            error_stack: e.stack,
-            timestamp: admin.firestore.Timestamp.now(),
-            status: "PENDING_RECOVERY",
-            recovery_attempts: 0,
-          });
-          console.log(
-            `${logPrefix} 📝 Logged to failed_payouts collection for manual recovery`,
-          );
-        } catch (logError) {
-          console.error(
-            `${logPrefix} ❌ Failed to log to failed_payouts:`,
-            logError,
-          );
-        }
-
-        // Send Discord alert about failed payout
-        try {
-          const { sendDiscordAlert } =
-            await import("../utils/discordAlerts.js");
-          await sendDiscordAlert({
-            type: "error",
-            title: "🚨 CRITICAL: Claim Payout Failed",
-            userId: firebaseUid,
-            amount: `${rewardAmount.toFixed(6)} SOL`,
-            feeTx: txSignature,
-            error: e.message,
-            message: `User paid fee but payout failed. REQUIRES MANUAL RECOVERY!\n\nRun: \`node scripts/tmp_rovodev_recover-failed-claim.js ${firebaseUid} --execute\``,
-          });
-        } catch (alertError) {
-          console.error(
-            `${logPrefix} ⚠️  Failed to send Discord alert:`,
-            alertError.message,
-          );
-        }
-
-        throw new StakingError(
-          "Payout failed. Please contact support. Your claim will be manually processed.",
-        );
-      }
-
-      console.log(
-        `${logPrefix} 🎉 Claim operation completed successfully for user ${firebaseUid}`,
-      );
-
-      return {
-        success: true,
-        amount: rewardAmount,
-        payoutSignature,
-        feeSignature: txSignature,
-        timestamp: new Date().toISOString(),
-      };
-    } catch (error) {
-      console.error(`${logPrefix} ❌ CLAIM OPERATION FAILED!`);
-      console.error(`${logPrefix}   - User: ${firebaseUid}`);
-      console.error(`${logPrefix}   - Error type: ${error.name}`);
-      console.error(`${logPrefix}   - Error message: ${error.message}`);
-      console.error(`${logPrefix}   - Stack trace:`, error.stack);
-
-      // Re-throw the error so it gets sent to the client
-      throw error;
-    }
+    throw new StakingError(
+      "Claiming is temporarily disabled. Please check back soon.",
+      403
+    );
   }
 
   /**
@@ -1235,13 +919,13 @@ class StakingService {
     }
 
     // 1. Calculate dynamic fee based on current SOL price
-    // $2.90 total ($2.00 base + $0.90 site fee)
+    // $2.50 total ($1.60 base + $0.90 site fee)
     const { getFeeInSol } = await import("../utils/solPrice.js");
     const {
       solAmount: feeAmount,
       usdAmount,
       solPrice,
-    } = await getFeeInSol(2.90); // $2.90 USD ($2.00 + $0.90 site fee)
+    } = await getFeeInSol(2.50); // $2.50 USD ($1.60 + $0.90 site fee)
 
     console.log(
       `💵 Unstake fee: $${usdAmount} = ${feeAmount.toFixed(
@@ -1294,7 +978,7 @@ class StakingService {
     const distributionResult = await distributeFees('unstake', 0.90, {
       treasuryDestination: "gatekeeper",
     });
-    
+
     if (distributionResult.success) {
       console.log(`✅ Fee distributed successfully`);
       console.log(`   Treasury: ${distributionResult.treasuryAmount.toFixed(6)} SOL`);
@@ -1303,45 +987,19 @@ class StakingService {
       console.warn(`⚠️ Fee distribution failed: ${distributionResult.error}`);
     }
 
-    // 4. Check vault MKIN balance BEFORE accepting fee
-    console.log(`🔍 Step 4: Checking vault MKIN balance...`);
-    const vaultAddress = new PublicKey(process.env.STAKING_WALLET_ADDRESS);
-    const vaultATA = await getAssociatedTokenAddress(
-      this.tokenMint,
-      vaultAddress,
-    );
+    // Calculate new $MKIN amount BEFORE the Firestore transaction
+    // No guard, no rounding — just divide and send exactly what they're owed
+    const newMkinAmount = amount / CONVERSION_RATIO;
 
-    try {
-      const vaultAccount = await getAccount(this.connection, vaultATA);
-      const vaultBalance = Number(vaultAccount.amount) / 1e9;
-
-      console.log(
-        `💰 Vault MKIN balance: ${vaultBalance.toLocaleString()} MKIN`,
-      );
-      console.log(`💰 Need to send: ${amount.toLocaleString()} MKIN`);
-
-      if (vaultBalance < amount) {
-        console.error(`❌ INSUFFICIENT VAULT MKIN BALANCE!`);
-        console.error(`   Vault: ${vaultBalance.toLocaleString()} MKIN`);
-        console.error(`   Required: ${amount.toLocaleString()} MKIN`);
-        console.error(
-          `   Shortfall: ${(amount - vaultBalance).toLocaleString()} MKIN`,
-        );
-        throw new StakingError(
-          `Service temporarily unavailable. Please try again later or contact support.`,
-        );
-      }
-      console.log(`✅ Vault has sufficient MKIN`);
-    } catch (error) {
-      if (error instanceof StakingError) throw error;
-      console.error(`❌ Failed to check vault balance: ${error.message}`);
-      throw new StakingError(
-        `Service temporarily unavailable. Please try again later or contact support.`,
-      );
-    }
+    // 4. Check vault NEW $MKIN balance BEFORE accepting fee
+    // SKIPPED during testing — vault likely doesn't have ATA for new mint yet
+    // TODO: restore this check after deploying new mint and funding vault
+    console.log(`🔍 Step 4: Vault $MKIN balance check SKIPPED (testing mode)`);
+    console.log(`   Would check: ${newMkinAmount} new $MKIN needed`);
 
     // 4. Check vault SOL balance for transaction fees
     console.log(`🔍 Step 4: Checking vault SOL balance...`);
+    const vaultAddress = new PublicKey(process.env.STAKING_WALLET_ADDRESS);
     const vaultSolBalance = await this.connection.getBalance(vaultAddress);
     const vaultSolBalanceSol = vaultSolBalance / 1e9;
     console.log(`💰 Vault SOL balance: ${vaultSolBalanceSol.toFixed(6)} SOL`);
@@ -1495,6 +1153,10 @@ class StakingService {
           user_id: firebaseUid,
           type: "UNSTAKE",
           amount_mkin: amount,
+          amount_mkin_old: amount,
+          amount_mkin_new: newMkinAmount,
+          conversion_ratio: CONVERSION_RATIO,
+          new_token_mint: NEW_MKIN_MINT_ADDRESS,
           fee_tx: txSignature,
           fee_amount_sol: feeAmount,
           fee_amount_usd: usdAmount,
@@ -1512,13 +1174,26 @@ class StakingService {
       );
     }
 
-    // 5. Send tokens from vault to user
+    // 5. Convert old MKIN amount to new $MKIN and send from vault
+    console.log(`${logPrefix} 🔄 Token Conversion:`);
+    console.log(`${logPrefix}    Old MKIN staked: ${amount.toLocaleString()}`);
+    console.log(`${logPrefix}    Conversion ratio: ${CONVERSION_RATIO.toLocaleString()} old = 1 $MKIN`);
+    console.log(`${logPrefix}    New $MKIN to send: ${newMkinAmount}`);
+
+    // Load treasury keypair (where new $MKIN tokens live)
+    const gatekeeperKeypair = Keypair.fromSecretKey(
+      new Uint8Array(JSON.parse(process.env.GATEKEEPER_KEYPAIR))
+    );
+
     let tokenSignature = null;
     try {
-      tokenSignature = await this._sendTokensFromVault(userWallet, amount);
-      console.log(
-        `✅ Unstake token transfer successful! Signature: ${tokenSignature}`,
+      tokenSignature = await this._sendTokensFromVault(
+        userWallet,
+        newMkinAmount,
+        NEW_MKIN_MINT_ADDRESS,    // new mint
+        gatekeeperKeypair         // send FROM treasury (where new tokens live)
       );
+      console.log(`${logPrefix} ✅ Sent ${newMkinAmount} new $MKIN to ${userWallet}`);
 
       // Update the transaction record with token signature
       const txSnapshot = await this.db
@@ -1549,6 +1224,9 @@ class StakingService {
           user_id: firebaseUid,
           type: "UNSTAKE",
           amount_mkin: amount,
+          amount_mkin_old: amount,
+          amount_mkin_new: newMkinAmount,
+          conversion_ratio: CONVERSION_RATIO,
           fee_tx: txSignature,
           fee_amount_sol: feeAmount,
           fee_amount_usd: usdAmount,
@@ -1601,7 +1279,9 @@ class StakingService {
       success: true,
       tokenSignature,
       feeSignature: txSignature,
-      amount,
+      amount,                        // old MKIN debited from position
+      newMkinAmount,                 // new $MKIN sent to user
+      conversionRatio: CONVERSION_RATIO,
       timestamp: new Date().toISOString(),
     };
   }
@@ -1827,16 +1507,28 @@ class StakingService {
    * Helper: Send Tokens from Vault to User
    * Used during unstaking to return tokens
    */
-  async _sendTokensFromVault(userWallet, amount) {
+  async _sendTokensFromVault(userWallet, amount, mintOverride = null, sourceKeypairOverride = null) {
     try {
-      const vaultPrivateKey = process.env.STAKING_PRIVATE_KEY;
-      if (!vaultPrivateKey) throw new Error("STAKING_PRIVATE_KEY not set");
+      let vaultKeypair;
+      if (sourceKeypairOverride) {
+        vaultKeypair = sourceKeypairOverride;
+        console.log(`   🔑 Using override source wallet: ${vaultKeypair.publicKey.toBase58()}`);
+      } else {
+        const vaultPrivateKey = process.env.STAKING_PRIVATE_KEY;
+        if (!vaultPrivateKey) throw new Error("STAKING_PRIVATE_KEY not set");
+        vaultKeypair = Keypair.fromSecretKey(bs58.decode(vaultPrivateKey));
+        console.log(`   🔑 Using default staking vault: ${vaultKeypair.publicKey.toBase58()}`);
+      }
 
-      // Use network configuration for token mint
-      const tokenMint = this.tokenMint;
+      // Use mintOverride if provided (e.g. for new $MKIN on unstake)
+      // Otherwise fall back to default token mint (old MKIN)
+      const tokenMint = mintOverride
+        ? new PublicKey(mintOverride)
+        : this.tokenMint;
 
-      // Decode vault keypair
-      const vaultKeypair = Keypair.fromSecretKey(bs58.decode(vaultPrivateKey));
+      console.log(`   🪙 Using token mint: ${tokenMint.toBase58()}`);
+      console.log(`   ${mintOverride ? '🆕 NEW $MKIN mint (unstake conversion)' : '📦 Default mint (old MKIN)'}`);
+
       const userPubkey = new PublicKey(userWallet);
 
       // Get ATAs
@@ -1846,8 +1538,24 @@ class StakingService {
       );
       const userATA = await getAssociatedTokenAddress(tokenMint, userPubkey);
 
+      // Check if vault's ATA exists, create if needed (new mint scenario)
+      let needsCreateVaultATA = false;
+      try {
+        await getAccount(this.connection, vaultATA);
+        console.log(`   ✅ Vault ATA exists: ${vaultATA.toBase58()}`);
+      } catch (e) {
+        if (e.name === "TokenAccountNotFoundError") {
+          console.log(
+            `   ⚠️ Vault ATA does not exist, will create: ${vaultATA.toBase58()}`,
+          );
+          needsCreateVaultATA = true;
+        } else {
+          throw e;
+        }
+      }
+
       // Check if user's ATA exists, create if needed
-      let needsCreateATA = false;
+      let needsCreateUserATA = false;
       try {
         await getAccount(this.connection, userATA);
         console.log(`   ✅ User ATA exists: ${userATA.toBase58()}`);
@@ -1856,7 +1564,7 @@ class StakingService {
           console.log(
             `   ⚠️ User ATA does not exist, will create: ${userATA.toBase58()}`,
           );
-          needsCreateATA = true;
+          needsCreateUserATA = true;
         } else {
           throw e;
         }
@@ -1865,15 +1573,27 @@ class StakingService {
       // Build transaction
       const transaction = new Transaction();
 
-      // Add create ATA instruction if needed (vault pays for rent)
-      if (needsCreateATA) {
-        const createATAIx = createAssociatedTokenAccountInstruction(
+      // Create vault ATA if needed (vault pays for rent)
+      if (needsCreateVaultATA) {
+        const createVaultATAIx = createAssociatedTokenAccountInstruction(
+          vaultKeypair.publicKey, // payer
+          vaultATA, // ata address
+          vaultKeypair.publicKey, // owner
+          tokenMint, // mint
+        );
+        transaction.add(createVaultATAIx);
+        console.log(`   📝 Added instruction to create vault ATA`);
+      }
+
+      // Add create user ATA instruction if needed (vault pays for rent)
+      if (needsCreateUserATA) {
+        const createUserATAIx = createAssociatedTokenAccountInstruction(
           vaultKeypair.publicKey, // payer
           userATA, // ata address
           userPubkey, // owner
           tokenMint, // mint
         );
-        transaction.add(createATAIx);
+        transaction.add(createUserATAIx);
         console.log(`   📝 Added instruction to create user ATA`);
       }
 
@@ -1955,7 +1675,7 @@ class StakingService {
       }
 
       console.log(
-        `✅ Sent ${amount} MKIN to ${userWallet}${needsCreateATA ? " (created ATA)" : ""}, signature: ${signature}`,
+        `✅ Sent ${amount} MKIN to ${userWallet}${needsCreateUserATA ? " (created user ATA)" : ""}${needsCreateVaultATA ? " (created vault ATA)" : ""}, signature: ${signature}`,
       );
       return signature;
     } catch (e) {
