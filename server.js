@@ -121,6 +121,7 @@ app.get("/health", (_req, res) => {
 
 // Import and mount routes
 import stakingRoutes from "./routes/staking.js";
+import nftStakingRoutes from "./routes/nft-staking.js";
 import goalRoutes from "./routes/goal.js";
 import leaderboardRoutes from "./routes/leaderboard.js";
 import boosterRoutes from "./routes/boosters.js";
@@ -129,6 +130,7 @@ import forceClaimRoutes from "./routes/force-claim.js";
 import revenueDistributionRoutes from "./routes/revenue-distribution.js";
 
 app.use("/api/staking", stakingRoutes);
+app.use("/api/nft-staking", nftStakingRoutes);
 app.use("/api/goal", goalRoutes);
 app.use("/api/leaderboard", leaderboardRoutes);
 app.use("/api/boosters", boosterRoutes);
@@ -791,6 +793,124 @@ async function setupAutomaticForceClaim() {
     console.error("[API] Failed to initialize force-claim scheduler:", error.message);
   }
 }
+
+// NFT Staking Monitor - Check for transferred NFTs every 2 hours
+async function initializeNftStakingMonitor() {
+  try {
+    const NFT_STAKING_CONFIG = (await import("./config/nftStaking.js")).NFT_STAKING_CONFIG;
+    
+    if (!NFT_STAKING_CONFIG.ENABLED) {
+      console.log("[API] ℹ️ NFT Staking is disabled, skipping monitor initialization");
+      return;
+    }
+
+    console.log("[API] 📅 NFT Staking Monitor: Running every 2 hours");
+
+    // Run every 2 hours: */120 * * * *
+    // Also run immediately on startup for testing
+    const runMonitor = async () => {
+      try {
+        console.log("⏰ [API] NFT Staking Monitor: Checking for transferred NFTs...");
+        
+        const nftStakingService = (await import("./services/nftStakingService.js")).default;
+        const db = admin.firestore();
+        
+        // Get all "staked" NFTs
+        const stakedSnapshot = await db
+          .collection("nft_stakes")
+          .where("status", "==", "staked")
+          .get();
+
+        console.log(`   Found ${stakedSnapshot.size} staked NFTs to check`);
+
+        let forfeitedCount = 0;
+        
+        // Group by wallet to minimize API calls (batch check)
+        const walletGroups = {};
+        for (const doc of stakedSnapshot.docs) {
+          const data = doc.data();
+          if (!walletGroups[data.walletAddress]) {
+            walletGroups[data.walletAddress] = [];
+          }
+          walletGroups[data.walletAddress].push(doc);
+        }
+
+        // Check each wallet's NFTs
+        for (const [wallet, stakeDocs] of Object.entries(walletGroups)) {
+          try {
+            // Check each NFT individually for ownership AND delegation status
+            for (const stakeDoc of stakeDocs) {
+              const stakeData = stakeDoc.data();
+              
+              // Get current NFT status from Helius
+              const response = await fetch(NFT_STAKING_CONFIG.HELIUS_RPC_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: "monitor-check",
+                  method: "getAsset",
+                  params: { id: stakeData.nftMint },
+                }),
+              });
+              
+              const data = await response.json();
+              const result = data.result;
+              const ownership = result?.ownership || {};
+              
+              const currentOwner = ownership.owner || ownership.address;
+              const hasDelegate = ownership.delegate !== null && ownership.delegate !== undefined;
+              
+              // Forfeit if: transferred OR listed (has delegate)
+              if (currentOwner !== wallet || hasDelegate) {
+                const reason = hasDelegate ? "listed on marketplace" : "transferred";
+                await stakeDoc.ref.update({
+                  status: "forfeited",
+                  finalReward: 0,
+                  lastCheckedAt: admin.firestore.Timestamp.now(),
+                  updatedAt: admin.firestore.Timestamp.now(),
+                });
+                forfeitedCount++;
+                console.log(`   ⚠️ NFT ${stakeData.nftMint} ${reason} - marked as forfeited`);
+              }
+            }
+          } catch (error) {
+            console.error(`   ❌ Error checking wallet ${wallet}:`, error.message);
+          }
+        }
+
+        console.log(`✅ [API] NFT Staking Monitor completed: ${forfeitedCount} NFTs forfeited`);
+        return { checked: stakedSnapshot.size, forfeited: forfeitedCount };
+      } catch (error) {
+        console.error("❌ [API] NFT Staking Monitor failed:", error.message);
+        throw error;
+      }
+    };
+
+    // Run immediately on startup for testing
+    console.log("[API] 🔄 Running initial NFT Staking Monitor check...");
+    runMonitor().then(result => {
+      console.log("[API] ✅ Initial check complete:", result);
+    }).catch(err => {
+      console.error("[API] ❌ Initial check failed:", err.message);
+    });
+
+    // Schedule every 2 hours
+    cron.schedule('*/120 * * * *', async () => {
+      await runMonitor();
+    }, {
+      scheduled: true,
+      timezone: "Africa/Lagos"
+    });
+
+    console.log("✅ [API] NFT Staking Monitor scheduler initialized successfully");
+  } catch (error) {
+    console.error("[API] Failed to initialize NFT Staking Monitor:", error.message);
+  }
+}
+
+// Run NFT Staking Monitor on startup
+initializeNftStakingMonitor();
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
