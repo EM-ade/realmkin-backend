@@ -813,6 +813,13 @@ async function initializeNftStakingMonitor() {
         console.log("⏰ [API] NFT Staking Monitor: Checking for transferred NFTs...");
         
         const nftStakingService = (await import("./services/nftStakingService.js")).default;
+        
+        // First, check and update stake statuses (convert to claimable if period ended)
+        console.log("⏰ [API] Checking stake statuses...");
+        const statusResult = await nftStakingService.checkAndUpdateStakeStatuses();
+        console.log("⏰ [API] Stake status check result:", statusResult);
+
+        // Then check for NFT transfers/listings
         const db = admin.firestore();
         
         // Get all "staked" NFTs

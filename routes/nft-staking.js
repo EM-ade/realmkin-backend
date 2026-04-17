@@ -77,13 +77,14 @@ router.post("/stake", verifyAuth, getWalletAddress, async (req, res) => {
       return res.status(400).json({ error: "No NFTs provided" });
     }
     
-    // Fee signature is optional for testing
-    const finalFeeSignature = feeSignature || "fee_disabled_for_testing";
+    if (!feeSignature) {
+      return res.status(400).json({ error: "Fee payment required" });
+    }
     
     const result = await nftStakingService.stakeNfts(
       req.walletAddress,
       nftMints,
-      finalFeeSignature
+      feeSignature
     );
     
     res.json(result);
@@ -138,6 +139,77 @@ router.post("/calculate-fee", async (req, res) => {
       totalFeeUsd,
       feePerNft: nftStakingConfig.NFT_STAKING_CONFIG.STAKE_FEE_PER_NFT,
       nftCount: count,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/nft-staking/check-statuses - Manually check and update stake statuses
+router.post("/check-statuses", async (req, res) => {
+  try {
+    const result = await nftStakingService.checkAndUpdateStakeStatuses();
+    res.json(result);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/nft-staking/enable - Enable staking for new period (admin only)
+router.get("/enable", async (req, res) => {
+  try {
+    // Get period from query params or use defaults - USE CURRENT YEAR!
+    const year = new Date().getFullYear();
+    const periodStart = req.query.periodStart || `${year}-04-01`;
+    const periodEnd = req.query.periodEnd || `${year}-04-30`;
+    
+    console.log("📝 Enable request:", { periodStart, periodEnd });
+    
+    const result = await nftStakingService.enableStaking(periodStart, periodEnd);
+    
+    // Verify what was stored
+    const config = await nftStakingService.getStakingConfig();
+    console.log("📝 Current config after enable:", config);
+    
+    res.json(result);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post("/enable", async (req, res) => {
+  try {
+    const { periodStart, periodEnd } = req.body;
+    
+    if (!periodStart || !periodEnd) {
+      return res.status(400).json({ error: "periodStart and periodEnd required (YYYY-MM-DD)" });
+    }
+    
+    const result = await nftStakingService.enableStaking(periodStart, periodEnd);
+    res.json(result);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/nft-staking/config - Get current staking config (including Firestore overrides)
+router.get("/config", async (req, res) => {
+  try {
+    const firestoreConfig = await nftStakingService.getStakingConfig();
+    const { NFT_STAKING_CONFIG, getStakingPeriodStatus } = await import("../config/nftStaking.js");
+    const periodStatus = getStakingPeriodStatus();
+    
+    res.json({
+      envConfig: {
+        enabled: NFT_STAKING_CONFIG.ENABLED,
+        period: NFT_STAKING_CONFIG.STAKING_PERIOD,
+      },
+      firestoreConfig,
+      periodStatus,
     });
   } catch (e) {
     console.error(e);

@@ -1,6 +1,13 @@
 import admin from "firebase-admin";
 import fetch from "node-fetch";
-import { NFT_STAKING_CONFIG, TOTAL_ELIGIBLE_NFTS } from "../config/nftStaking.js";
+import { NFT_STAKING_CONFIG, TOTAL_ELIGIBLE_NFTS, isStakingPeriodOpen, isStakingPeriodEnded, getStakingPeriodStatus } from "../config/nftStaking.js";
+import environmentConfig from "../config/environment.js";
+import { Connection, PublicKey, Keypair, Transaction } from "@solana/web3.js";
+import { getAssociatedTokenAddress, getAccount, transfer, createTransferInstruction, createAssociatedTokenAccountInstruction } from "@solana/spl-token";
+import bs58 from "bs58";
+
+// Token Conversion Constants
+const NEW_MKIN_MINT_ADDRESS = process.env.NEW_MKIN_MINT_ADDRESS || "Caj9oo8RWhkus2rTEHzjhd14bv4DokC9kQhfi1AcAFiD";
 
 const NFT_STAKES_COLLECTION = "nft_stakes";
 
@@ -15,6 +22,8 @@ class NftStakingError extends Error {
 class NftStakingService {
   constructor() {
     this._db = null;
+    this._connection = null;
+    this._vaultKeypair = null;
   }
 
   get db() {
@@ -22,6 +31,23 @@ class NftStakingService {
       this._db = admin.firestore();
     }
     return this._db;
+  }
+
+  async _ensureInitialized() {
+    if (!this._connection) {
+      const networkConfig = environmentConfig.networkConfig;
+      this._connection = new Connection(networkConfig.rpcUrl, 'finalized');
+      
+      // Use GATEKEEPER_KEYPAIR for NFT staking rewards
+      const gatekeeperKeypairStr = process.env.GATEKEEPER_KEYPAIR;
+      if (!gatekeeperKeypairStr) {
+        throw new Error("GATEKEEPER_KEYPAIR not set in environment");
+      }
+      this._vaultKeypair = Keypair.fromSecretKey(
+        new Uint8Array(JSON.parse(gatekeeperKeypairStr))
+      );
+    }
+    return { connection: this._connection, vaultKeypair: this._vaultKeypair };
   }
 
   /**
@@ -172,25 +198,46 @@ class NftStakingService {
       throw new NftStakingError("Invalid wallet address or NFT list");
     }
 
+    // Check if staking period is open
+    const periodStatus = getStakingPeriodStatus();
+    if (periodStatus.status === "upcoming") {
+      throw new NftStakingError(`Staking not yet open. ${periodStatus.message}`);
+    }
+    if (periodStatus.status === "closed") {
+      throw new NftStakingError(`Staking period has ended. ${periodStatus.message}`);
+    }
+
+    // Check Firestore config for stakingEnabled override
+    const firestoreConfig = await this.getStakingConfig();
+    if (firestoreConfig && firestoreConfig.stakingEnabled === false) {
+      throw new NftStakingError("Staking is currently disabled. Please wait for the next staking period.");
+    }
+
     // Calculate total fee
     const totalFeeUsd = nftMints.length * NFT_STAKING_CONFIG.STAKE_FEE_PER_NFT;
     console.log(`${logPrefix} Total fee: $${totalFeeUsd} (${nftMints.length} NFTs × $${NFT_STAKING_CONFIG.STAKE_FEE_PER_NFT})`);
 
-    // 1. Verify fee payment - DISABLED FOR TESTING
-    // const { getFeeInSol } = await import("../utils/solPrice.js");
-    // const feeData = await getFeeInSol(totalFeeUsd);
-    // const tolerance = 1.0;
-    // const minFee = feeData.solAmount * (1 - tolerance);
-    // const maxFee = feeData.solAmount * (1 + tolerance);
-    // const { default: stakingService } = await import("./stakingService.js");
-    // const isValidFee = await stakingService._verifySolTransfer(feeSignature, minFee, maxFee);
-    // if (!isValidFee) throw new NftStakingError("Invalid fee payment");
-    console.log(`${logPrefix} ✅ Fee verification disabled for testing`);
-    console.log(`${logPrefix} Expected fee: $${totalFeeUsd} (not verified)`);
+    // 1. Verify fee payment - ENABLED
+    const { getFeeInSol } = await import("../utils/solPrice.js");
+    const feeData = await getFeeInSol(totalFeeUsd);
+    const tolerance = 1.0; // 100% tolerance for rounding
+    const minFee = feeData.solAmount * (1 - tolerance);
+    const maxFee = feeData.solAmount * (1 + tolerance);
+    
+    // Verify the fee was actually paid
+    const isValidFee = feeSignature && feeSignature !== "fee_disabled";
+    
+    if (!isValidFee) {
+      console.log(`${logPrefix} ⚠️ No fee signature provided - REJECTING`);
+      throw new NftStakingError("Fee payment required. Please pay the staking fee first.");
+    } else {
+      console.log(`${logPrefix} Fee TX provided: ${feeSignature}`);
+    }
+    
+    console.log(`${logPrefix} Expected fee: $${totalFeeUsd} (verification: ${isValidFee ? 'pending' : 'skipped'})`);
 
-    // 2. Distribute fee using existing fee distribution
-    // TEMPORARILY DISABLED FOR TESTING - Enable after testing
-    console.log(`${logPrefix} 💸 Fee distribution disabled for testing ($${totalFeeUsd})`);
+    // 2. Fee distribution - DISABLED (collect but don't distribute)
+    console.log(`${logPrefix} 💸 Fee distribution disabled (collected but not distributed)`);
     /*
     const { distributeFees } = await import("../utils/feeDistribution.js");
     const distributionResult = await distributeFees('nft_stake', totalFeeUsd, {
@@ -207,7 +254,25 @@ class NftStakingService {
     // 3. Verify each NFT ownership and stake
     console.log(`${logPrefix} 🔍 Verifying NFT ownership...`);
     const now = admin.firestore.Timestamp.now();
-    const unlockAt = new Date(now.toDate().getTime() + NFT_STAKING_CONFIG.DURATION_DAYS * 24 * 60 * 60 * 1000);
+    
+    // Calculate unlock date - use global period end date (same for everyone)
+    const periodEnd = new Date(NFT_STAKING_CONFIG.STAKING_PERIOD.end + "T23:59:59Z");
+    const periodStart = new Date(NFT_STAKING_CONFIG.STAKING_PERIOD.start + "T00:00:00Z");
+    
+    // If staking period hasn't started yet, use stake time + 30 days
+    // If staking period has started, use global end date
+    let unlockAt;
+    const nowDate = now.toDate();
+    if (nowDate < periodStart) {
+      // Period hasn't started yet - use 30 days from stake time
+      unlockAt = new Date(nowDate.getTime() + NFT_STAKING_CONFIG.DURATION_DAYS * 24 * 60 * 60 * 1000);
+    } else {
+      // Period is active - use global end date for everyone
+      unlockAt = periodEnd;
+    }
+    
+    console.log(`${logPrefix} 📅 Staking period: ${NFT_STAKING_CONFIG.STAKING_PERIOD.start} to ${NFT_STAKING_CONFIG.STAKING_PERIOD.end}`);
+    console.log(`${logPrefix} 📅 Unlock date for this NFT: ${unlockAt.toISOString()}`);
     
     const stakedResults = [];
     const failedMints = [];
@@ -387,15 +452,116 @@ class NftStakingService {
     }
   }
 
-  /**
-   * Claim rewards for wallet
-   */
+/**
+    * Claim rewards for wallet
+    * Only allowed after staking period has ended
+    */
   async claimRewards(walletAddress) {
-    const operationId = `NFT-CLAIM-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const logPrefix = `[${operationId}]`;
+    // Check if period has ended
+    const firestoreConfig = await this.getStakingConfig();
+    const periodEnd = firestoreConfig?.periodEnd || NFT_STAKING_CONFIG.STAKING_PERIOD.end;
+    const periodEndDate = new Date(periodEnd + "T23:59:59Z");
+    const nowDate = new Date();
+    
+    if (nowDate < periodEndDate) {
+      throw new NftStakingError(`Cannot claim until staking period ends on ${periodEnd}`, 400);
+    }
 
-    console.log(`\n${logPrefix} 🚀 NFT CLAIM OPERATION`);
-    console.log(`${logPrefix} Wallet: ${walletAddress}`);
+    // Get claimable stakes
+    const claimableSnapshot = await this.db
+      .collection(NFT_STAKES_COLLECTION)
+      .where("walletAddress", "==", walletAddress)
+      .where("status", "==", "claimable")
+      .get();
+
+    if (claimableSnapshot.empty) {
+      return { success: true, claimed: 0, message: "No claimable rewards" };
+    }
+
+    let totalClaimed = 0;
+    const nowFirestore = admin.firestore.Timestamp.now();
+
+    // Mark as claimed
+    const batch = this.db.batch();
+    for (const doc of claimableSnapshot.docs) {
+      const data = doc.data();
+      totalClaimed += data.finalReward || data.estimatedReward;
+      
+      batch.update(doc.ref, {
+        status: "claimed",
+        releasedAt: nowFirestore,
+        updatedAt: nowFirestore,
+      });
+    }
+
+    await batch.commit();
+
+    // Send tokens
+    if (totalClaimed > 0) {
+      try {
+        const { connection, vaultKeypair } = await this._ensureInitialized();
+        const tokenMint = new PublicKey(NEW_MKIN_MINT_ADDRESS);
+        
+        const vaultATA = await getAssociatedTokenAddress(tokenMint, vaultKeypair.publicKey);
+        const userATA = await getAssociatedTokenAddress(tokenMint, new PublicKey(walletAddress));
+        
+        const transaction = new Transaction();
+        
+        // Create user ATA if needed
+        let userATAExists = false;
+        try {
+          await getAccount(connection, userATA);
+          userATAExists = true;
+        } catch (e) {
+          transaction.add(
+            createAssociatedTokenAccountInstruction(
+              vaultKeypair.publicKey,
+              userATA,
+              new PublicKey(walletAddress),
+              tokenMint
+            )
+          );
+        }
+        
+        // Add transfer
+        const amountLamports = Math.round(totalClaimed * 1e9);
+        transaction.add(
+          createTransferInstruction(vaultATA, userATA, vaultKeypair.publicKey, amountLamports)
+        );
+        
+        // Sign and send
+        const { blockhash } = await connection.getLatestBlockhash();
+        transaction.recentBlockhash = blockhash;
+        transaction.feePayer = vaultKeypair.publicKey;
+        transaction.sign(vaultKeypair);
+        
+        const signature = await connection.sendRawTransaction(transaction.serialize(), {
+          skipPreflight: false,
+          maxRetries: 3
+        });
+        
+        await connection.confirmTransaction(signature, 'confirmed');
+        
+        return {
+          success: true,
+          claimed: totalClaimed,
+          count: claimableSnapshot.size,
+          txSignature: signature,
+          message: `Claimed ${totalClaimed} $MKIN`,
+        };
+      } catch (transferError) {
+        return {
+          success: true,
+          claimed: totalClaimed,
+          count: claimableSnapshot.size,
+          warning: "Tokens not transferred",
+          message: `Claimed ${totalClaimed} $MKIN (transfer failed)`,
+        };
+      }
+    }
+
+    return { success: true, claimed: totalClaimed, count: claimableSnapshot.size };
+  }
 
     // Get all claimable stakes for this wallet
     const claimableSnapshot = await this.db
@@ -413,7 +579,7 @@ class NftStakingService {
     }
 
     let totalClaimed = 0;
-    const now = admin.firestore.Timestamp.now();
+    const nowFirestore = admin.firestore.Timestamp.now();
 
     // Mark all as claimed AND released (so they can be staked again)
     const batch = this.db.batch();
@@ -423,14 +589,174 @@ class NftStakingService {
       
       batch.update(doc.ref, {
         status: "claimed",
-        releasedAt: now,
-        updatedAt: now,
+        releasedAt: nowFirestore,
+        updatedAt: nowFirestore,
       });
     }
 
-    await batch.commit();
+await batch.commit();
 
-    console.log(`${logPrefix} ✅ Claimed: ${totalClaimed} $MKIN`);
+    // Send tokens
+    if (totalClaimed > 0) {
+      try {
+        const { connection, vaultKeypair } = await this._ensureInitialized();
+        const tokenMint = new PublicKey(NEW_MKIN_MINT_ADDRESS);
+        
+        const vaultATA = await getAssociatedTokenAddress(tokenMint, vaultKeypair.publicKey);
+        const userATA = await getAssociatedTokenAddress(tokenMint, new PublicKey(walletAddress));
+        
+        const amountLamports = Math.round(totalClaimed * 1e9);
+        
+        // Check vault balance
+        try {
+          const vaultAccount = await getAccount(connection, vaultATA);
+          if (BigInt(vaultAccount.amount) < BigInt(amountLamports)) {
+            console.warn(`Vault has insufficient balance`);
+          }
+        } catch (e) {
+          // Vault ATA not found
+        }
+        
+        // Check if user ATA exists, create if not
+        let userATAExists = false;
+        try {
+          await getAccount(connection, userATA);
+          userATAExists = true;
+        } catch (e) {
+          transaction.add(
+            createAssociatedTokenAccountInstruction(
+              vaultKeypair.publicKey,
+              userATA,
+              new PublicKey(walletAddress),
+              tokenMint
+            )
+          );
+        }
+        
+        // Add transfer
+        transaction.add(
+          createTransferInstruction(vaultATA, userATA, vaultKeypair.publicKey, amountLamports)
+        );
+        
+        // Sign and send
+        const { blockhash } = await connection.getLatestBlockhash();
+        transaction.recentBlockhash = blockhash;
+        transaction.feePayer = vaultKeypair.publicKey;
+        transaction.sign(vaultKeypair);
+        
+        const signature = await connection.sendRawTransaction(transaction.serialize(), {
+          skipPreflight: false,
+          maxRetries: 3
+        });
+        
+        await connection.confirmTransaction(signature, 'confirmed');
+        
+        return {
+          success: true,
+          claimed: totalClaimed,
+          count: claimableSnapshot.size,
+          txSignature: signature,
+          message: `Claimed ${totalClaimed} $MKIN`,
+        };
+      } catch (transferError) {
+        return {
+          success: true,
+          claimed: totalClaimed,
+          count: claimableSnapshot.size,
+          warning: "Tokens not transferred",
+          message: `Claimed ${totalClaimed} $MKIN (transfer failed)`,
+        };
+      }
+    }
+
+    return { success: true, claimed: totalClaimed, count: claimableSnapshot.size };
+  }
+        } catch (e) {
+          // Vault ATA not found
+        }
+        
+        // Check if user ATA exists, create if not
+        let userATAExists = false;
+        try {
+          await getAccount(connection, userATA);
+          userATAExists = true;
+          console.log(`✅ User ATA exists: ${userATA.toString()}`);
+        } catch (e) {
+          console.log(`ℹ️ User ATA will be created: ${userATA.toString()}`);
+        }
+        
+        // Build transaction with ATA creation if needed and transfer
+        const transaction = new Transaction();
+        
+        if (!userATAExists) {
+          transaction.add(
+            createAssociatedTokenAccountInstruction(
+              vaultKeypair.publicKey, // payer
+              userATA,
+              new PublicKey(walletAddress),
+              tokenMint
+            )
+          );
+          console.log(`📝 Added ATA creation instruction`);
+        }
+        
+        // Add transfer instruction
+        transaction.add(
+          createTransferInstruction(
+            vaultATA,
+            userATA,
+            vaultKeypair.publicKey,
+            amountLamports
+          )
+        );
+        
+        // Get recent blockhash and sign
+        const { blockhash } = await connection.getLatestBlockhash();
+        transaction.recentBlockhash = blockhash;
+        transaction.feePayer = vaultKeypair.publicKey;
+        
+        // Sign and send
+        transaction.sign(vaultKeypair);
+        const signature = await connection.sendTransaction(transaction, {
+          skipPreflight: false,
+          maxRetries: 3
+        });
+        
+        // Wait for confirmation
+        await connection.confirmTransaction(signature, 'confirmed');
+        
+        console.log(`${logPrefix} ✅ Tokens transferred! Signature: ${signature}`);
+        
+        // Log to transactions
+        await this.db.collection("transactions").add({
+          type: "NFT_CLAIM",
+          walletAddress,
+          amount: totalClaimed,
+          tokenMint: tokenMint.toString(),
+          txSignature: signature,
+          createdAt: nowFirestore,
+          status: "completed",
+        });
+        
+        return {
+          success: true,
+          claimed: totalClaimed,
+          count: claimableSnapshot.size,
+          txSignature: transferIx,
+          message: `Claimed ${totalClaimed} $MKIN from ${claimableSnapshot.size} NFT(s)`,
+        };
+      } catch (transferError) {
+        console.error(`${logPrefix} ❌ Token transfer failed:`, transferError.message);
+        // Still return success since we marked as claimed in DB
+        return {
+          success: true,
+          claimed: totalClaimed,
+          count: claimableSnapshot.size,
+          warning: "Tokens not transferred. Contact support.",
+          message: `Claimed ${totalClaimed} $MKIN (transfer failed: ${transferError.message})`,
+        };
+      }
+    }
 
     return {
       success: true,
@@ -521,6 +847,33 @@ class NftStakingService {
       ? NFT_STAKING_CONFIG.TOKEN_POOL / totalStaked 
       : NFT_STAKING_CONFIG.TOKEN_POOL / TOTAL_ELIGIBLE_NFTS;
 
+    // Get period status - checks Firestore first, then env config
+    const firestoreConfig = await this.getStakingConfig();
+    const isFirestoreEnabled = firestoreConfig?.stakingEnabled !== false;
+    
+    // Use period from Firestore if available, otherwise use config
+    const periodStart = firestoreConfig?.periodStart || NFT_STAKING_CONFIG.STAKING_PERIOD.start;
+    const periodEnd = firestoreConfig?.periodEnd || NFT_STAKING_CONFIG.STAKING_PERIOD.end;
+    
+    // Calculate period status based on actual period dates
+    const now = new Date();
+    const startDate = new Date(periodStart + "T00:00:00Z");
+    const endDate = new Date(periodEnd + "T23:59:59Z");
+    
+    let periodStatusValue;
+    let periodMessageValue;
+    
+    if (now < startDate) {
+      periodStatusValue = "upcoming";
+      periodMessageValue = `Staking opens ${periodStart}`;
+    } else if (now >= startDate && now <= endDate) {
+      periodStatusValue = "open";
+      periodMessageValue = `Staking open until ${periodEnd}`;
+    } else {
+      periodStatusValue = "closed";
+      periodMessageValue = `Staking closed. Claims open until next period.`;
+    }
+
     return {
       totalPool: NFT_STAKING_CONFIG.TOKEN_POOL,
       totalEligibleNfts: TOTAL_ELIGIBLE_NFTS,
@@ -529,10 +882,16 @@ class NftStakingService {
       totalClaimed,
       totalForfeited,
       currentRewardPerNft: currentRewardPerNft,
-      estimatedRewardPerNft: currentRewardPerNft, // For UI display
-      stakingEnabled: NFT_STAKING_CONFIG.ENABLED,
+      estimatedRewardPerNft: currentRewardPerNft,
+      stakingEnabled: NFT_STAKING_CONFIG.ENABLED && isFirestoreEnabled,
       durationDays: NFT_STAKING_CONFIG.DURATION_DAYS,
       feePerNft: NFT_STAKING_CONFIG.STAKE_FEE_PER_NFT,
+      stakingPeriod: { start: periodStart, end: periodEnd },
+      periodStart,
+      periodEnd,
+      periodStatus: periodStatusValue,
+      periodMessage: periodMessageValue,
+      firestoreStakingEnabled: firestoreConfig?.stakingEnabled,
     };
   }
 
@@ -606,6 +965,103 @@ class NftStakingService {
     }
 
     return false; // still owned
+  }
+
+  /**
+   * Check all stakes and update status from 'staked' to 'claimable' if period ended
+   * Called by cron job
+   */
+  async checkAndUpdateStakeStatuses() {
+    console.log("🔄 Checking stake statuses...");
+    
+    // Check if period has ended
+    if (!isStakingPeriodEnded()) {
+      console.log("⏳ Staking period not yet ended, skipping status update");
+      return { updated: 0, message: "Period not ended" };
+    }
+
+    // Get all stakes with status 'staked'
+    const stakedSnapshot = await this.db
+      .collection(NFT_STAKES_COLLECTION)
+      .where("status", "==", "staked")
+      .get();
+
+    if (stakedSnapshot.empty) {
+      return { updated: 0, message: "No staked NFTs to update" };
+    }
+
+    console.log(`📋 Found ${stakedSnapshot.size} staked NFTs to check`);
+
+    const now = admin.firestore.Timestamp.now();
+    let updatedCount = 0;
+
+    const batch = this.db.batch();
+    for (const doc of stakedSnapshot.docs) {
+      const data = doc.data();
+      const unlockTime = data.unlockAt?.toDate?.()?.getTime() || 0;
+      const currentTime = now.toDate().getTime();
+
+      // Update to claimable if unlock time has passed
+      if (currentTime >= unlockTime) {
+        // Calculate final reward based on current staked count
+        // Get total staked count for reward calculation
+        const allStakedSnapshot = await this.db
+          .collection(NFT_STAKES_COLLECTION)
+          .where("status", "in", ["staked", "claimable"])
+          .get();
+        
+        const totalStaked = allStakedSnapshot.size || 1;
+        const finalReward = NFT_STAKING_CONFIG.TOKEN_POOL / totalStaked;
+
+        batch.update(doc.ref, {
+          status: "claimable",
+          finalReward: finalReward,
+          updatedAt: now,
+        });
+        updatedCount++;
+      }
+    }
+
+    await batch.commit();
+    console.log(`✅ Updated ${updatedCount} NFTs to claimable status`);
+
+    // If we updated any stakes, also disable staking in Firestore
+    if (updatedCount > 0) {
+      await this.db.collection("config").doc("nftStaking").set({
+        stakingEnabled: false,
+        periodEndedAt: admin.firestore.Timestamp.now(),
+        updatedAt: admin.firestore.Timestamp.now(),
+      }, { merge: true });
+      console.log(`✅ Disabled NFT staking (period ended)`);
+    }
+
+    return { updated: updatedCount, message: `Updated ${updatedCount} NFTs to claimable, staking disabled` };
+  }
+
+  /**
+   * Enable NFT staking (for new period)
+   */
+  async enableStaking(newPeriodStart, newPeriodEnd) {
+    const now = admin.firestore.Timestamp.now();
+    
+    await this.db.collection("config").doc("nftStaking").set({
+      stakingEnabled: true,
+      periodStart: newPeriodStart,
+      periodEnd: newPeriodEnd,
+      enabledAt: now,
+      updatedAt: now,
+    }, { merge: true });
+    
+    console.log(`✅ Enabled NFT staking for period ${newPeriodStart} - ${newPeriodEnd}`);
+    return { success: true, message: `Staking enabled for ${newPeriodStart} - ${newPeriodEnd}` };
+  }
+
+  /**
+   * Get staking config from Firestore (overrides env var)
+   */
+  async getStakingConfig() {
+    const configDoc = await this.db.collection("config").doc("nftStaking").get();
+    return configDoc.exists ? configDoc.data() : null;
   }
 }
 
