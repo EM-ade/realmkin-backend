@@ -56,11 +56,18 @@ class StakingService {
 
     // Use environment-configured RPC URL
     this.connection = new Connection(networkConfig.rpcUrl, "confirmed");
-    this.tokenMint = new PublicKey(networkConfig.tokenMint);
+    // MIGRATED: Use NEW token mint (April 2026) - Old token no longer accepted for staking
+    this.tokenMint = new PublicKey(networkConfig.newTokenMint);
     this.isDevnet = networkConfig.isDevnet;
     this.cluster = networkConfig.cluster;
     this.network = networkConfig.cluster;
+    
+    // Migration tracking
+    this.isMigrated = networkConfig.isMigrated || true;
+    this.newTokenPriceUsd = networkConfig.newTokenPriceUsd || 5.39;
+    
     console.log(`✅ StakingService initialized with network: ${this.network}`);
+    console.log(`   🪙 Using NEW token mint: ${this.tokenMint.toBase58()} (MIGRATED)`);
   }
 
   async _ensureInitialized() {
@@ -377,6 +384,99 @@ class StakingService {
       },
       timestamp: Date.now(),
     };
+  }
+
+  /**
+   * MIGRATE STAKE
+   * Migrate existing stake from OLD token to NEW token
+   * Preserves USD value and reward rate
+   * 
+   * @param {string} firebaseUid - User ID
+   * @param {number} lockedPriceSol - The locked SOL price for this position
+   * @param {number} currentSolPrice - Current SOL price in USD
+   * @returns {object} Migration result
+   */
+  async migrateStake(firebaseUid, lockedPriceSol, currentSolPrice) {
+    const operationId = `MIGRATE-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const logPrefix = `[${operationId}]`;
+
+    console.log(`\n${"=".repeat(80)}`);
+    console.log(`${logPrefix} 🔄 STAKE MIGRATION STARTED`);
+    console.log(`${"=".repeat(80)}`);
+    console.log(`${logPrefix} User ID: ${firebaseUid}`);
+    console.log(`${logPrefix} Locked price (SOL): ${lockedPriceSol}`);
+    console.log(`${logPrefix} Current SOL price: $${currentSolPrice}`);
+
+    // Ensure initialized
+    await this._ensureInitialized();
+
+    // Get current price of new token
+    const newTokenPriceUsd = this.newTokenPriceUsd || 5.39;
+    console.log(`${logPrefix} New token price: $${newTokenPriceUsd}`);
+
+    try {
+      // Run migration in transaction
+      await this.db.runTransaction(async (t) => {
+        const posRef = this.db.collection(POSITIONS_COLLECTION).doc(firebaseUid);
+        const posDoc = await t.get(posRef);
+
+        if (!posDoc.exists) {
+          console.log(`${logPrefix} ⚠️ No position found for user, skipping`);
+          return { skipped: true, reason: "no_position" };
+        }
+
+        const posData = posDoc.data();
+        const oldPrincipal = posData.principal_amount || 0;
+        
+        // Check if already migrated
+        if (posData.principal_amount_new && posData.migrated_at) {
+          console.log(`${logPrefix} ⚠️ Already migrated, skipping`);
+          return { skipped: true, reason: "already_migrated" };
+        }
+
+        if (oldPrincipal <= 0) {
+          console.log(`${logPrefix} ⚠️ No stake to migrate, skipping`);
+          return { skipped: true, reason: "zero_stake" };
+        }
+
+        // Calculate USD value using LOCKED price (preserves their original stake value)
+        const oldUsdValue = oldPrincipal * lockedPriceSol * currentSolPrice;
+        console.log(`${logPrefix} Old stake: ${oldPrincipal.toLocaleString()} tokens = $${oldUsdValue.toFixed(2)}`);
+
+        // Convert to new tokens
+        const newTokens = oldUsdValue / newTokenPriceUsd;
+        console.log(`${logPrefix} New stake: ${newTokens.toFixed(6)} tokens = $${(newTokens * newTokenPriceUsd).toFixed(2)}`);
+
+        // Calculate equivalent reward (should be same)
+        const oldReward = oldUsdValue * 0.10; // 10% APR
+        const newReward = newTokens * newTokenPriceUsd * 0.10;
+        console.log(`${logPrefix} Reward: OLD: $${oldReward.toFixed(2)}/yr → NEW: $${newReward.toFixed(2)}/yr`);
+
+        // Update position with new values (keep old for history)
+        const now = admin.firestore.Timestamp.now();
+        
+        t.update(posRef, {
+          principal_amount_old: oldPrincipal, // Keep for history
+          principal_amount: newTokens, // Now in NEW tokens
+          principal_amount_new: newTokens, // Explicit new token amount
+          locked_token_price_usd: newTokenPriceUsd, // New locked price
+          locked_token_price_sol: null, // Clear old SOL price (no longer relevant)
+          migration_ratio: 2_500_000,
+          migrated_at: now,
+          migrated_by: "system",
+          migration_locked_price_sol: lockedPriceSol, // Store original for reference
+          migration_sol_price: currentSolPrice,
+          updated_at: now,
+        });
+
+        console.log(`${logPrefix} ✅ Migration complete`);
+      });
+
+      return { success: true };
+    } catch (error) {
+      console.error(`${logPrefix} ❌ Migration failed:`, error.message);
+      throw new StakingError(`Migration failed: ${error.message}`);
+    }
   }
 
   /**

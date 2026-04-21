@@ -92,6 +92,13 @@ class EnvironmentConfig {
       tokenMint: isDevnet
         ? process.env.MKIN_TOKEN_MINT_DEVNET || 'CARXmxarjsCwvzpmjVB2x4xkAo8fMgsAVUBPREoUGyZm'
         : process.env.MKIN_TOKEN_MINT_MAINNET || 'BKDGf6DnDHK87GsZpdWXyBqiNdcNb6KnoFcYbWPUhJLA',
+      // New $MKIN token (migrated from old) - MIGRATED: April 2026
+      newTokenMint: isDevnet
+        ? process.env.NEW_MKIN_MINT_DEVNET || 'Caj9oo8RWhkus2rTEHzjhd14bv4DokC9kQhfi1AcAFiD'
+        : process.env.NEW_MKIN_MINT_MAINNET || 'Caj9oo8RWhkus2rTEHzjhd14bv4DokC9kQhfi1AcAFiD',
+      newTokenPriceUsd: 5.39, // Current price of new $MKIN
+      migrationRatio: 2_500_000, // 2,500,000 old = 1 new
+      isMigrated: true, // Flag indicating system has migrated
       // Prioritize Helius RPC endpoints, fallback to public endpoints
       rpcUrl: isDevnet
         ? process.env.HELIUS_DEVNET_RPC_URL || process.env.SOLANA_DEVNET_RPC_URL || 'https://api.devnet.solana.com'
