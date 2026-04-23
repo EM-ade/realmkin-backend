@@ -9,7 +9,7 @@ const leaderboardCache = {
   secondaryMarket: { data: null, timestamp: 0 },
 };
 
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const CACHE_DURATION = 6 * 60 * 60 * 1000; // 6 hours
 
 function getCachedData(cacheKey) {
   const cached = leaderboardCache[cacheKey];
@@ -23,12 +23,12 @@ function getCachedData(cacheKey) {
 }
 
 function setCachedData(cacheKey, data) {
-  leaderboardCache[cacheKey] = {
-    data,
-    timestamp: Date.now(),
-  };
-  console.log(`[Leaderboard] Cached ${cacheKey} for ${CACHE_DURATION / 1000}s`);
-}
+ leaderboardCache[cacheKey] = {
+ data,
+ timestamp: Date.now(),
+ };
+ console.log(`[Leaderboard] Cached ${cacheKey} for ${CACHE_DURATION / 1000 / 60}min (expires at ${new Date(Date.now() + CACHE_DURATION).toLocaleTimeString()})`);
+ }
 
 /**
  * Invalidate secondary market cache
@@ -422,12 +422,16 @@ router.get('/secondary-market', async (req, res) => {
       return res.json(cached);
     }
     
-    const db = admin.firestore();
-    console.log(`[Leaderboard] Fetching top ${limit} secondary market buyers from database`);
-    
-    // Query all cached entries (can't filter by salesCount in query without index)
-    const cacheRef = db.collection('secondarySaleCache');
-    const cacheSnapshot = await cacheRef.get();
+const db = admin.firestore();
+ console.log(`[Leaderboard] Fetching top ${limit} secondary market buyers from database`);
+
+ // Query cached entries with limit to prevent collection scans
+ // Using orderBy + limit for efficient query
+ const cacheRef = db.collection('secondarySaleCache');
+ const cacheSnapshot = await cacheRef
+ .orderBy('salesCount', 'desc')
+ .limit(100) // Limit to top 100 to prevent excessive reads
+ .get();
     
     if (cacheSnapshot.empty) {
       console.log('[Leaderboard] No secondary market data in cache');
@@ -480,32 +484,11 @@ router.get('/secondary-market', async (req, res) => {
       });
     }
     
-    console.log(`[Leaderboard] Found ${walletLookup.size} users in wallets collection`);
-    
-    // Step 2: For wallets not found, check userRewards (single query)
-    const notFoundWallets = walletAddresses.filter(addr => !walletLookup.has(addr));
-    if (notFoundWallets.length > 0) {
-      console.log(`[Leaderboard] Checking userRewards for ${notFoundWallets.length} remaining wallets...`);
-      
-      // Query userRewards for all missing wallets (uses IN operator, max 30 at a time)
-      const QUERY_LIMIT = 30;
-      for (let i = 0; i < notFoundWallets.length; i += QUERY_LIMIT) {
-        const batchWallets = notFoundWallets.slice(i, i + QUERY_LIMIT);
-        const userRewardsSnapshot = await db.collection('userRewards')
-          .where('walletAddress', 'in', batchWallets)
-          .get();
-        
-        userRewardsSnapshot.forEach(doc => {
-          const data = doc.data();
-          walletLookup.set(data.walletAddress, {
-            userId: doc.id,
-            source: 'userRewards'
-          });
-        });
-      }
-      
-      console.log(`[Leaderboard] Found ${walletLookup.size} total users after userRewards check`);
-    }
+console.log(`[Leaderboard] Found ${walletLookup.size} users in wallets collection`);
+
+ // REMOVED: userRewards fallback query (causes collection-wide reads)
+ // This was causing 10,000+ reads per leaderboard refresh
+ // Users not found in wallets collection will use default "User XXXX..." naming
     
     // Step 3: Batch get user profiles for all found userIds
     const userIds = Array.from(new Set(

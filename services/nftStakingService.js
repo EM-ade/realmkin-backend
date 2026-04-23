@@ -24,6 +24,12 @@ class NftStakingService {
     this._db = null;
     this._connection = null;
     this._vaultKeypair = null;
+    // Cache for pool stats to prevent collection-wide reads
+    this._poolStatsCache = {
+      data: null,
+      timestamp: 0,
+      ttl: 5 * 60 * 1000 // 5 minutes
+    };
   }
 
   get db() {
@@ -280,9 +286,19 @@ class NftStakingService {
     for (const mint of nftMints) {
       try {
         // Verify ownership via Helius - now returns { owned, listed }
-        const ownershipCheck = await this._verifyNftOwnership(mint, walletAddress);
+          // Check cache first
+  const cacheKey = `nft-ownership-${mint}`;
+  let ownershipCheck = useCache ? await redisCache.get(cacheKey) : null;
+  if (useCache && ownershipCheck) {
+    ownershipCheck = JSON.parse(ownershipCheck);
+  } else {
+    ownershipCheck = await this._verifyNftOwnership(mint, walletAddress, false);
+    if (useCache) {
+      await redisCache.set(cacheKey, ownershipCheck, 300); // 5-minute cache
+    }
+  }
         
-        if (!ownershipCheck.owned) {
+        if (!ownershipCheck?.owned) {
           console.log(`${logPrefix} ❌ NFT ${mint} not owned by ${walletAddress}`);
           failedMints.push({ mint, reason: "Not owned by wallet" });
           continue;
@@ -350,9 +366,12 @@ class NftStakingService {
       }
     }
 
-    console.log(`${logPrefix} 🎉 NFT Stake Operation Complete`);
-    console.log(`${logPrefix}   Successful: ${stakedResults.length}`);
-    console.log(`${logPrefix}   Failed: ${failedMints.length}`);
+console.log(`${logPrefix} 🎉 NFT Stake Operation Complete`);
+    console.log(`${logPrefix} Successful: ${stakedResults.length}`);
+    console.log(`${logPrefix} Failed: ${failedMints.length}`);
+
+    // Invalidate pool stats cache since stakes changed
+    this.invalidatePoolStatsCache();
 
     return {
       success: true,
@@ -419,20 +438,23 @@ class NftStakingService {
         updatedAt: now,
       });
 
-      console.log(`${logPrefix} ✅ NFT unlocked - reward claimable: ${finalReward.toFixed(2)} $MKIN (based on ${totalCurrentlyStaked} total staked)`);
+console.log(`${logPrefix} ✅ NFT unlocked - reward claimable: ${finalReward.toFixed(2)} $MKIN (based on ${totalCurrentlyStaked} total staked)`);
 
-      return {
-        success: true,
-        nftMint,
-        status: "claimable",
-        reward: finalReward,
-        totalStakedAtUnlock: totalCurrentlyStaked,
-        message: `NFT unlocked! You can now claim ${finalReward.toFixed(2)} $MKIN`,
-      };
-    } else {
+    // Invalidate cache since stake status changed
+    this.invalidatePoolStatsCache();
+
+    return {
+      success: true,
+      nftMint,
+      status: "claimable",
+      reward: finalReward,
+      totalStakedAtUnlock: totalCurrentlyStaked,
+      message: `NFT unlocked! You can now claim ${finalReward.toFixed(2)} $MKIN`,
+    };
+  } else {
       // Early unstake - reward forfeited
       const daysRemaining = NFT_STAKING_CONFIG.DURATION_DAYS - daysPassed;
-      
+
       await stakeDoc.ref.update({
         status: "forfeited",
         finalReward: 0,
@@ -440,7 +462,10 @@ class NftStakingService {
       });
 
       console.log(`${logPrefix} ⚠️ Early unstake - reward forfeited`);
-      console.log(`${logPrefix}   Days remaining: ${daysRemaining.toFixed(1)}`);
+      console.log(`${logPrefix} Days remaining: ${daysRemaining.toFixed(1)}`);
+
+      // Invalidate cache since stake status changed
+      this.invalidatePoolStatsCache();
 
       return {
         success: true,
@@ -450,6 +475,7 @@ class NftStakingService {
         message: `Early unstake - reward forfeited (${daysRemaining.toFixed(1)} days early)`,
       };
     }
+  }
   }
 
 /**
@@ -494,19 +520,22 @@ class NftStakingService {
       });
     }
 
-    await batch.commit();
+await batch.commit();
+
+    // Invalidate cache since claimable stakes changed
+    this.invalidatePoolStatsCache();
 
     // Send tokens
     if (totalClaimed > 0) {
       try {
         const { connection, vaultKeypair } = await this._ensureInitialized();
         const tokenMint = new PublicKey(NEW_MKIN_MINT_ADDRESS);
-        
+
         const vaultATA = await getAssociatedTokenAddress(tokenMint, vaultKeypair.publicKey);
         const userATA = await getAssociatedTokenAddress(tokenMint, new PublicKey(walletAddress));
-        
+
         const transaction = new Transaction();
-        
+
         // Create user ATA if needed
         let userATAExists = false;
         try {
@@ -522,26 +551,26 @@ class NftStakingService {
             )
           );
         }
-        
+
         // Add transfer
         const amountLamports = Math.round(totalClaimed * 1e9);
         transaction.add(
           createTransferInstruction(vaultATA, userATA, vaultKeypair.publicKey, amountLamports)
         );
-        
+
         // Sign and send
         const { blockhash } = await connection.getLatestBlockhash();
         transaction.recentBlockhash = blockhash;
         transaction.feePayer = vaultKeypair.publicKey;
         transaction.sign(vaultKeypair);
-        
+
         const signature = await connection.sendRawTransaction(transaction.serialize(), {
           skipPreflight: false,
           maxRetries: 3
         });
-        
+
         await connection.confirmTransaction(signature, 'confirmed');
-        
+
         return {
           success: true,
           claimed: totalClaimed,
@@ -622,17 +651,28 @@ class NftStakingService {
     };
   }
 
-  /**
+/**
    * Get pool stats
+   * Uses 5-minute cache to prevent excessive Firestore reads
    */
   async getPoolStats() {
+    const now = Date.now();
+    
+    // Check cache first
+    if (this._poolStatsCache.data && (now - this._poolStatsCache.timestamp) < this._poolStatsCache.ttl) {
+      console.log(`[NFT Staking] Pool stats cache HIT (age: ${Math.round((now - this._poolStatsCache.timestamp) / 1000)}s)`);
+      return this._poolStatsCache.data;
+    }
+
+    console.log(`[NFT Staking] Pool stats cache MISS - fetching from Firestore`);
+
     // Get all stakes
     const allSnapshot = await this.db
       .collection(NFT_STAKES_COLLECTION)
       .get();
 
     const stakes = allSnapshot.docs.map(doc => doc.data());
-    
+
     const totalStaked = stakes.filter(s => s.status === "staked").length;
     const totalClaimable = stakes.filter(s => s.status === "claimable").length;
     const totalClaimed = stakes.filter(s => s.status === "claimed").length;
@@ -640,30 +680,30 @@ class NftStakingService {
 
     // Calculate current reward rate (dynamic - 20000 / actual staked)
     // If no one has staked yet, show the potential max rate (20000 / eligible)
-    const currentRewardPerNft = totalStaked > 0 
-      ? NFT_STAKING_CONFIG.TOKEN_POOL / totalStaked 
+    const currentRewardPerNft = totalStaked > 0
+      ? NFT_STAKING_CONFIG.TOKEN_POOL / totalStaked
       : NFT_STAKING_CONFIG.TOKEN_POOL / TOTAL_ELIGIBLE_NFTS;
 
     // Get period status - checks Firestore first, then env config
     const firestoreConfig = await this.getStakingConfig();
     const isFirestoreEnabled = firestoreConfig?.stakingEnabled !== false;
-    
+
     // Use period from Firestore if available, otherwise use config
     const periodStart = firestoreConfig?.periodStart || NFT_STAKING_CONFIG.STAKING_PERIOD.start;
     const periodEnd = firestoreConfig?.periodEnd || NFT_STAKING_CONFIG.STAKING_PERIOD.end;
-    
+
     // Calculate period status based on actual period dates
-    const now = new Date();
+    const nowDate = new Date();
     const startDate = new Date(periodStart + "T00:00:00Z");
     const endDate = new Date(periodEnd + "T23:59:59Z");
-    
+
     let periodStatusValue;
     let periodMessageValue;
-    
-    if (now < startDate) {
+
+    if (nowDate < startDate) {
       periodStatusValue = "upcoming";
       periodMessageValue = `Staking opens ${periodStart}`;
-    } else if (now >= startDate && now <= endDate) {
+    } else if (nowDate >= startDate && nowDate <= endDate) {
       periodStatusValue = "open";
       periodMessageValue = `Staking open until ${periodEnd}`;
     } else {
@@ -671,7 +711,7 @@ class NftStakingService {
       periodMessageValue = `Staking closed. Claims open until next period.`;
     }
 
-    return {
+    const result = {
       totalPool: NFT_STAKING_CONFIG.TOKEN_POOL,
       totalEligibleNfts: TOTAL_ELIGIBLE_NFTS,
       totalNftsStaked: totalStaked,
@@ -690,6 +730,13 @@ class NftStakingService {
       periodMessage: periodMessageValue,
       firestoreStakingEnabled: firestoreConfig?.stakingEnabled,
     };
+
+    // Cache the result
+    this._poolStatsCache.data = result;
+    this._poolStatsCache.timestamp = Date.now();
+    console.log(`[NFT Staking] Pool stats cached for ${this._poolStatsCache.ttl / 1000}s (expires at ${new Date(now + this._poolStatsCache.ttl).toLocaleTimeString()})`);
+
+    return result;
   }
 
   /**
@@ -830,6 +877,9 @@ class NftStakingService {
         updatedAt: admin.firestore.Timestamp.now(),
       }, { merge: true });
       console.log(`✅ Disabled NFT staking (period ended)`);
+      
+      // Invalidate cache since stakes were updated
+      this.invalidatePoolStatsCache();
     }
 
     return { updated: updatedCount, message: `Updated ${updatedCount} NFTs to claimable, staking disabled` };
@@ -859,6 +909,16 @@ class NftStakingService {
   async getStakingConfig() {
     const configDoc = await this.db.collection("config").doc("nftStaking").get();
     return configDoc.exists ? configDoc.data() : null;
+  }
+
+  /**
+   * Invalidate pool stats cache
+   * Called when stakes change (stake/unstake/claim operations)
+   */
+  invalidatePoolStatsCache() {
+    this._poolStatsCache.data = null;
+    this._poolStatsCache.timestamp = 0;
+    console.log('[NFT Staking] Pool stats cache invalidated');
   }
 }
 
