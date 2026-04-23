@@ -467,21 +467,20 @@ console.log(`${logPrefix} ✅ NFT unlocked - reward claimable: ${finalReward.toF
       // Invalidate cache since stake status changed
       this.invalidatePoolStatsCache();
 
-      return {
-        success: true,
-        nftMint,
-        status: "forfeited",
-        reward: 0,
-        message: `Early unstake - reward forfeited (${daysRemaining.toFixed(1)} days early)`,
-      };
-    }
+return {
+      success: true,
+      nftMint,
+      status: "forfeited",
+      reward: 0,
+      message: `Early unstake - reward forfeited (${daysRemaining.toFixed(1)} days early)`,
+    };
   }
   }
 
-/**
-    * Claim rewards for wallet
-    * Only allowed after staking period has ended
-    */
+  /**
+   * Claim rewards for wallet
+   * Only allowed after staking period has ended
+   */
   async claimRewards(walletAddress) {
     // Check if period has ended
     const firestoreConfig = await this.getStakingConfig();
