@@ -98,15 +98,16 @@ class NftStakingService {
       const hasFreezeAuthority = freezeAuthority !== null && freezeAuthority !== undefined;
       console.log(`   NFT ${nftMint} has freeze_authority: ${freezeAuthority}, has capability: ${hasFreezeAuthority}`);
 
-      // Check for delegate - if set, NFT might be in marketplace escrow
-      const isDelegated = ownership?.delegated || false;
-      const delegate = ownership?.delegate || null;
-      if (delegate) {
-        console.log(`   ⚠️ NFT ${nftMint} has delegate: ${delegate} - may be listed on marketplace`);
-      }
-      
-      const isOwned = owner === expectedOwner;
-      const isListed = delegate !== null; // If delegate is set, consider it potentially listed
+       // Check for delegate - if set, NFT might be in marketplace escrow
+       const isDelegated = ownership?.delegated || false;
+       const delegate = ownership?.delegate || null;
+       if (delegate) {
+         console.log(`   ⚠️ NFT ${nftMint} has delegate: ${delegate} - may be listed on marketplace`);
+       }
+       
+       const isOwned = owner === expectedOwner;
+       // Only mark as listed if delegate exists AND is not the owner themselves
+       const isListed = delegate !== null && delegate !== expectedOwner;
       
       console.log(`   NFT ${nftMint}: owner=${owner}, expected=${expectedOwner}, valid=${isOwned}, delegated=${isDelegated}, listed=${isListed}`);
       
@@ -286,18 +287,8 @@ class NftStakingService {
     for (const mint of nftMints) {
       try {
         // Verify ownership via Helius - now returns { owned, listed }
-          // Check cache first
-  const cacheKey = `nft-ownership-${mint}`;
-  let ownershipCheck = useCache ? await redisCache.get(cacheKey) : null;
-  if (useCache && ownershipCheck) {
-    ownershipCheck = JSON.parse(ownershipCheck);
-  } else {
-    ownershipCheck = await this._verifyNftOwnership(mint, walletAddress, false);
-    if (useCache) {
-      await redisCache.set(cacheKey, ownershipCheck, 300); // 5-minute cache
-    }
-  }
-        
+        const ownershipCheck = await this._verifyNftOwnership(mint, walletAddress);
+
         if (!ownershipCheck?.owned) {
           console.log(`${logPrefix} ❌ NFT ${mint} not owned by ${walletAddress}`);
           failedMints.push({ mint, reason: "Not owned by wallet" });
