@@ -866,11 +866,13 @@ async function initializeNftStakingMonitor() {
               const ownership = result?.ownership || {};
               
               const currentOwner = ownership.owner || ownership.address;
-              const hasDelegate = ownership.delegate !== null && ownership.delegate !== undefined;
+              const delegate = ownership.delegate || null;
+              // Only mark as listed if delegate exists AND is not the owner themselves (self-delegation is OK)
+              const hasExternalDelegate = delegate !== null && delegate !== wallet;
               
-              // Forfeit if: transferred OR listed (has delegate)
-              if (currentOwner !== wallet || hasDelegate) {
-                const reason = hasDelegate ? "listed on marketplace" : "transferred";
+              // Forfeit if: transferred OR listed (has external delegate)
+              if (currentOwner !== wallet || hasExternalDelegate) {
+                const reason = hasExternalDelegate ? "listed on marketplace" : "transferred";
                 await stakeDoc.ref.update({
                   status: "forfeited",
                   finalReward: 0,

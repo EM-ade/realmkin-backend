@@ -483,7 +483,49 @@ return {
       throw new NftStakingError(`Cannot claim until staking period ends on ${periodEnd}`, 400);
     }
 
-    // Get claimable stakes
+    // First, check for staked NFTs that are past their unlock date and transition them to claimable
+    const stakedSnapshot = await this.db
+      .collection(NFT_STAKES_COLLECTION)
+      .where("walletAddress", "==", walletAddress)
+      .where("status", "==", "staked")
+      .get();
+
+    const nowFirestore = admin.firestore.Timestamp.now();
+    const transitionBatch = this.db.batch();
+    const NFTsToTransition = [];
+
+    for (const doc of stakedSnapshot.docs) {
+      const data = doc.data();
+      const unlockTime = data.unlockAt?.toDate?.()?.getTime() || 0;
+      const currentTime = nowDate.getTime();
+
+      if (currentTime >= unlockTime) {
+        // Calculate final reward based on current staked count
+        const allStakedSnapshot = await this.db
+          .collection(NFT_STAKES_COLLECTION)
+          .where("status", "in", ["staked", "claimable"])
+          .get();
+        
+        const totalStaked = allStakedSnapshot.size || 1;
+        const finalReward = NFT_STAKING_CONFIG.TOKEN_POOL / totalStaked;
+
+        transitionBatch.update(doc.ref, {
+          status: "claimable",
+          finalReward: finalReward,
+          estimatedReward: finalReward,
+          updatedAt: nowFirestore,
+        });
+        NFTsToTransition.push({ mint: data.nftMint, finalReward });
+      }
+    }
+
+    if (NFTsToTransition.length > 0) {
+      await transitionBatch.commit();
+      console.log(`🔄 Transitioned ${NFTsToTransition.length} staked NFTs to claimable status`);
+      this.invalidatePoolStatsCache();
+    }
+
+    // Get claimable stakes (including newly transitioned ones)
     const claimableSnapshot = await this.db
       .collection(NFT_STAKES_COLLECTION)
       .where("walletAddress", "==", walletAddress)
@@ -495,7 +537,6 @@ return {
     }
 
     let totalClaimed = 0;
-    const nowFirestore = admin.firestore.Timestamp.now();
 
     // Mark as claimed
     const batch = this.db.batch();
@@ -623,7 +664,19 @@ await batch.commit();
       : 0;
 
     const totalEstimated = staked.length * currentRewardRate;
-    const totalClaimable = claimable.reduce((sum, s) => sum + (s.finalReward || 0), 0);
+    
+    // Calculate totalClaimable - if finalReward is missing, calculate it based on current pool
+    const totalClaimableCount = claimable.length;
+    const totalStakedAndClaimable = staked.length + claimable.length;
+    const rewardPerNftForClaimable = totalStakedAndClaimable > 0 
+      ? NFT_STAKING_CONFIG.TOKEN_POOL / totalStakedAndClaimable 
+      : 0;
+    
+    const totalClaimable = claimable.reduce((sum, s) => {
+      // Use finalReward if set, otherwise calculate based on current pool
+      return sum + (s.finalReward || rewardPerNftForClaimable);
+    }, 0);
+    
     const totalClaimed = claimed.reduce((sum, s) => sum + (s.finalReward || 0), 0);
 
     return {
@@ -738,11 +791,11 @@ await batch.commit();
     // Get user's NFTs from Helius
     const walletNfts = await this._getWalletNfts(walletAddress);
     
-    // Get already staked OR claimable OR claimed NFT mints (all active/previous stakes)
+    // Get already staked OR claimable NFT mints (exclude claimed - they can be staked again)
     const stakedSnapshot = await this.db
       .collection(NFT_STAKES_COLLECTION)
       .where("walletAddress", "==", walletAddress)
-      .where("status", "in", ["staked", "claimable", "claimed"])
+      .where("status", "in", ["staked", "claimable"])
       .get();
 
     const stakedMints = new Set(stakedSnapshot.docs.map(d => d.data().nftMint));
